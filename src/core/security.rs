@@ -1,0 +1,1 @@
+//! Verificacoes de seguranca
