@@ -1,1 +1,1 @@
-//! Verificacoes de seguranca
+//! Security

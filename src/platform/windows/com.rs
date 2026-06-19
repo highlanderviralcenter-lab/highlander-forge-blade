@@ -1,1 +1,1 @@
-//! Stub
+//! Helpers COM para WMI

@@ -2,6 +2,7 @@
 
 use crate::core::error::CoreError;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub enum AppMsg {
@@ -12,38 +13,25 @@ pub enum AppMsg {
     Select,
     Back,
     AuditStarted,
-    AuditProgress {
-        phase: AuditPhase,
-        item: String,
-        percent: u8,
-    },
+    AuditProgress { phase: AuditPhase, item: String, percent: u8 },
     AuditCompleted(Box<AuditData>),
     AuditFailed(CoreError),
     SummaryDisplayed,
     UserConfirmed(bool),
     CleanupStarted,
-    CleanupProgress {
-        operation: CleanupOp,
-        detail: String,
-        percent: u8,
-        bytes_freed: u64,
-    },
+    CleanupProgress { operation: CleanupOp, detail: String, percent: u8, bytes_freed: u64 },
     CleanupCompleted,
     CleanupFailed(CoreError),
     RebootScheduled,
     RebootCancelled,
     PostRebootStarted,
-    PostRebootProgress {
-        tool: RepairTool,
-        percent: u8,
-        detail: String,
-    },
+    PostRebootProgress { tool: RepairTool, percent: u8, detail: String },
     PostRebootCompleted,
     PostRebootFailed(CoreError),
     LogLine(LogEntry),
     Error(CoreError),
     StateSaved,
-    StateLoaded(Result<AppState, StateError>),
+    StateLoaded(Result<crate::app::state::StateFile, StateError>),
     ReportGenerated(ReportFormat),
     UpdateCheckStarted,
     UpdateAvailable(String),
@@ -61,42 +49,18 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn info(source: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            timestamp: Utc::now(),
-            level: LogLevel::Info,
-            source: source.into(),
-            message: message.into(),
-        }
+        Self { timestamp: Utc::now(), level: LogLevel::Info, source: source.into(), message: message.into() }
     }
-
     pub fn warn(message: impl Into<String>) -> Self {
-        Self {
-            timestamp: Utc::now(),
-            level: LogLevel::Warn,
-            source: "system".to_string(),
-            message: message.into(),
-        }
+        Self { timestamp: Utc::now(), level: LogLevel::Warn, source: "system".to_string(), message: message.into() }
     }
-
     pub fn success(message: impl Into<String>) -> Self {
-        Self {
-            timestamp: Utc::now(),
-            level: LogLevel::Success,
-            source: "system".to_string(),
-            message: message.into(),
-        }
+        Self { timestamp: Utc::now(), level: LogLevel::Success, source: "system".to_string(), message: message.into() }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Success,
-    Phase,
-}
+pub enum LogLevel { Debug, Info, Warn, Error, Success, Phase }
 
 impl std::fmt::Display for LogLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,42 +75,20 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditPhase {
-    Hardware,
-    Software,
-    Updates,
-    Services,
-    Registry,
-    Environment,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuditPhase { Hardware, Software, Updates, Services, Registry, Environment }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CleanupOp {
-    TempFiles,
-    BrowserCache,
-    RecycleBin,
-    OldLogs,
-    WindowsUpdates,
-    ServicesOptimize,
-    RegistryClean,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupOp { TempFiles, BrowserCache, RecycleBin, OldLogs, WindowsUpdates, ServicesOptimize, RegistryClean }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepairTool {
-    Sfc,
-    Dism,
-    Chkdsk,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepairTool { Sfc, Dism, Chkdsk }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReportFormat {
-    Html,
-    Txt,
-    Json,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReportFormat { Html, Txt, Json }
 
-#[derive(Debug, Clone, Default)]
+// === AUDIT DATA com Serialize/Deserialize ===
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditData {
     pub cpu: Option<CpuInfo>,
     pub memory: Option<MemoryInfo>,
@@ -160,101 +102,70 @@ pub struct AuditData {
     pub environment: EnvironmentVars,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CpuInfo {
-    pub name: String,
-    pub manufacturer: String,
-    pub cores: u32,
-    pub threads: u32,
-    pub max_speed_mhz: u32,
-    pub architecture: String,
-    pub socket: String,
+    pub name: String, pub manufacturer: String, pub cores: u32, pub threads: u32,
+    pub max_speed_mhz: u32, pub architecture: String, pub socket: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryInfo {
     pub total_bytes: u64,
     pub modules: Vec<MemoryModule>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryModule {
-    pub slot: String,
-    pub capacity_bytes: u64,
-    pub speed_mhz: u32,
-    pub manufacturer: String,
+    pub slot: String, pub capacity_bytes: u64, pub speed_mhz: u32, pub manufacturer: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiskInfo {
-    pub device_id: String,
-    pub volume_name: String,
-    pub filesystem: String,
-    pub total_bytes: u64,
-    pub free_bytes: u64,
-    pub used_bytes: u64,
-    pub percent_free: f64,
+    pub device_id: String, pub volume_name: String, pub filesystem: String,
+    pub total_bytes: u64, pub free_bytes: u64, pub used_bytes: u64, pub percent_free: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GpuInfo {
-    pub name: String,
-    pub manufacturer: String,
-    pub adapter_ram_bytes: u64,
-    pub resolution: String,
-    pub driver_version: String,
+    pub name: String, pub manufacturer: String, pub adapter_ram_bytes: u64,
+    pub resolution: String, pub driver_version: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MotherboardInfo {
-    pub manufacturer: String,
-    pub product: String,
-    pub version: String,
-    pub serial_number: String,
-    pub bios_vendor: String,
-    pub bios_version: String,
-    pub bios_date: String,
+    pub manufacturer: String, pub product: String, pub version: String, pub serial_number: String,
+    pub bios_vendor: String, pub bios_version: String, pub bios_date: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TemperatureReading {
-    pub zone: String,
-    pub celsius: f64,
+    pub zone: String, pub celsius: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SoftwareInfo {
-    pub display_name: String,
-    pub display_version: String,
-    pub publisher: String,
-    pub install_date: String,
-    pub install_location: String,
+    pub display_name: String, pub display_version: String, pub publisher: String,
+    pub install_date: String, pub install_location: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServiceInfo {
-    pub name: String,
-    pub display_name: String,
-    pub state: String,
-    pub start_mode: String,
-    pub is_third_party: bool,
-    pub path: String,
+    pub name: String, pub display_name: String, pub state: String, pub start_mode: String,
+    pub is_third_party: bool, pub path: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunKey {
-    pub hive: String,
-    pub name: String,
-    pub value: String,
+    pub hive: String, pub name: String, pub value: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnvironmentVars {
     pub system: Vec<(String, String)>,
     pub user: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 pub enum StateError {
     #[error("Arquivo de estado nao encontrado")]
     NotFound,
@@ -264,10 +175,11 @@ pub enum StateError {
     Parse(String),
     #[error("Versao de schema nao suportada: {0}")]
     UnsupportedVersion(u32),
-    #[error("Checksum invalido — estado pode estar corrompido")]
+    #[error("Checksum invalido")]
     InvalidChecksum,
 }
 
+// === APP STATE & SCREEN ===
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
     pub current_screen: Screen,
@@ -278,6 +190,37 @@ pub struct AppState {
     pub status_message: String,
     pub is_simulation: bool,
     pub phases_completed: Vec<String>,
+}
+
+impl AppState {
+    pub fn update(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::Tick => {}
+            AppMsg::NavigateUp => { if self.selected_menu_item > 0 { self.selected_menu_item -= 1; } }
+            AppMsg::NavigateDown => { if self.selected_menu_item < 10 { self.selected_menu_item += 1; } }
+            AppMsg::Select => { self.status_message = format!("Selecionado item {}", self.selected_menu_item); }
+            AppMsg::Back => { self.current_screen = Screen::Menu; }
+            AppMsg::AuditStarted => { self.current_screen = Screen::AuditProgress; self.progress = 0.0; }
+            AppMsg::AuditCompleted(data) => { self.audit_data = Some(data); self.current_screen = Screen::Summary; self.progress = 100.0; }
+            AppMsg::AuditFailed(ref err) => { self.status_message = format!("Erro: {}", err); self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err))); }
+            AppMsg::CleanupStarted => { self.current_screen = Screen::CleanupProgress; self.progress = 0.0; }
+            AppMsg::CleanupCompleted => { self.current_screen = Screen::RebootConfirm; self.progress = 100.0; }
+            AppMsg::UserConfirmed(true) => { self.current_screen = Screen::PostRebootProgress; }
+            AppMsg::UserConfirmed(false) => { self.current_screen = Screen::Menu; }
+            AppMsg::PostRebootStarted => { self.current_screen = Screen::PostRebootProgress; self.progress = 0.0; }
+            AppMsg::PostRebootCompleted => { self.current_screen = Screen::ReportView; self.progress = 100.0; }
+            AppMsg::ReportGenerated(_) => { self.current_screen = Screen::ReportView; }
+            AppMsg::LogLine(entry) => { self.logs.push(entry); if self.logs.len() > 500 { self.logs.remove(0); } }
+            AppMsg::Error(ref err) => { self.status_message = format!("Erro: {}", err); self.logs.push(LogEntry::warn(format!("Erro: {}", err))); }
+            AppMsg::StateSaved => { self.status_message = "Estado salvo".to_string(); }
+            AppMsg::StateLoaded(Ok(_)) => { self.status_message = "Estado carregado".to_string(); }
+            AppMsg::StateLoaded(Err(ref e)) => { self.status_message = format!("Erro ao carregar: {}", e); }
+            AppMsg::UpdateAvailable(ref v) => { self.status_message = format!("Update {} disponivel", v); }
+            AppMsg::UpdateNotAvailable => { self.status_message = "Nenhum update".to_string(); }
+            AppMsg::UpdateFailed(ref err) => { self.status_message = format!("Falha no update: {}", err); }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

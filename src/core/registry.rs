@@ -1,1 +1,1 @@
-//! Manipulacao de registry
+//! Registry

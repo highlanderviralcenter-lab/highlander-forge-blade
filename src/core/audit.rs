@@ -13,11 +13,7 @@ pub struct Auditor<'a> {
 }
 
 impl<'a> Auditor<'a> {
-    pub fn new(
-        sys: &'a dyn SystemInfoProvider,
-        reg: &'a dyn RegistryProvider,
-        svc: &'a dyn ServiceProvider,
-    ) -> Self {
+    pub fn new(sys: &'a dyn SystemInfoProvider, reg: &'a dyn RegistryProvider, svc: &'a dyn ServiceProvider) -> Self {
         Self { sys, reg, svc }
     }
 
@@ -51,26 +47,19 @@ impl<'a> Auditor<'a> {
 
         self.report_progress(tx, AuditPhase::Hardware, "Concluido", 100).await;
         info!("Auditoria completa finalizada");
-
         Ok(data)
     }
 
     async fn report_progress(&self, tx: &Sender<AppMsg>, phase: AuditPhase, item: &str, percent: u8) {
-        let _ = tx.send(AppMsg::AuditProgress {
-            phase,
-            item: item.to_string(),
-            percent,
-        }).await;
+        let _ = tx.send(AppMsg::AuditProgress { phase, item: item.to_string(), percent }).await;
     }
 
     fn collect_software(&self) -> Result<Vec<SoftwareInfo>, CoreError> {
         let mut software = Vec::new();
-
         let paths = [
             r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
             r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
         ];
-
         for path in &paths {
             match self.reg.enum_subkeys(path) {
                 Ok(subkeys) => {
@@ -87,12 +76,9 @@ impl<'a> Auditor<'a> {
                         }
                     }
                 }
-                Err(e) => {
-                    warn!("Nao foi possivel ler {}: {}", path, e);
-                }
+                Err(e) => warn!("Nao foi possivel ler {}: {}", path, e),
             }
         }
-
         software.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         Ok(software)
     }
@@ -104,19 +90,13 @@ impl<'a> Auditor<'a> {
             ("HKLM", r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
             ("HKCU", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
         ];
-
         for (hive, path) in &paths {
             if let Ok(values) = self.reg.enum_values(path) {
                 for (name, value) in values {
-                    keys.push(RunKey {
-                        hive: hive.to_string(),
-                        name,
-                        value,
-                    });
+                    keys.push(RunKey { hive: hive.to_string(), name, value });
                 }
             }
         }
-
         Ok(keys)
     }
 
@@ -124,5 +104,39 @@ impl<'a> Auditor<'a> {
         let system: Vec<(String, String)> = std::env::vars().collect();
         let user: Vec<(String, String)> = std::env::vars().collect();
         Ok(EnvironmentVars { system, user })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::traits::{MockSystemInfoProvider, MockRegistryProvider, MockServiceProvider};
+
+    #[tokio::test]
+    async fn test_audit_full_flow() {
+        let mut mock_sys = MockSystemInfoProvider::new();
+        let mock_reg = MockRegistryProvider::new();
+        let mock_svc = MockServiceProvider::new();
+
+        mock_sys.expect_cpu().times(1).returning(|| Ok(CpuInfo {
+            name: "Intel i7-9700K".to_string(), manufacturer: "Intel".to_string(),
+            cores: 8, threads: 8, max_speed_mhz: 4900, architecture: "x64".to_string(), socket: "LGA1151".to_string(),
+        }));
+        mock_sys.expect_memory().times(1).returning(|| Ok(MemoryInfo {
+            total_bytes: 17179869184,
+            modules: vec![MemoryModule { slot: "DIMM1".to_string(), capacity_bytes: 17179869184, speed_mhz: 3200, manufacturer: "Corsair".to_string() }],
+        }));
+        mock_sys.expect_disks().times(1).returning(|| Ok(vec![]));
+        mock_sys.expect_gpu().times(1).returning(|| Ok(vec![]));
+        mock_sys.expect_motherboard().times(1).returning(|| Ok(MotherboardInfo::default()));
+        mock_sys.expect_temperatures().times(1).returning(|| Ok(vec![]));
+
+        let auditor = Auditor::new(&mock_sys, &mock_reg, &mock_svc);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = auditor.run_full(&tx).await;
+        assert!(result.is_ok());
+
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(msg, AppMsg::AuditProgress { phase: AuditPhase::Hardware, .. }));
     }
 }

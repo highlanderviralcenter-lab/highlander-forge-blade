@@ -1,4 +1,4 @@
-//! Camadas de UI — TUI (ratatui) e GUI (iced futuro)
+//! Modulo de UI
 
 #[cfg(feature = "tui")]
 pub mod ratatui;

@@ -7,11 +7,7 @@ use std::process;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
-    let log_format = if args.headless {
-        LogFormat::Json
-    } else {
-        LogFormat::Human
-    };
+    let log_format = if args.headless { LogFormat::Json } else { LogFormat::Human };
     logging::init_logging(log_format);
 
     tracing::info!("Highlander Forge Blade v{}", env!("CARGO_PKG_VERSION"));
@@ -30,9 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_headless(args).await
     } else {
         #[cfg(feature = "tui")]
-        {
-            run_tui(args).await
-        }
+        { run_tui(args).await }
         #[cfg(not(feature = "tui"))]
         {
             tracing::error!("Feature 'tui' nao compilada. Use --features tui");
@@ -62,92 +56,42 @@ struct Args {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
-    Human,
-    Json,
-}
+enum OutputFormat { Human, Json }
 
 fn parse_args() -> Args {
-    let mut args = Args {
-        headless: false,
-        auto_phase: None,
-        what_if: false,
-        check_update: false,
-        format: OutputFormat::Human,
-    };
-
+    let mut args = Args { headless: false, auto_phase: None, what_if: false, check_update: false, format: OutputFormat::Human };
     let raw: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < raw.len() {
         match raw[i].as_str() {
-            "--auto-phase" => {
-                i += 1;
-                if i < raw.len() {
-                    args.headless = true;
-                    args.auto_phase = Some(raw[i].clone());
-                }
-            }
-            "--what-if" => {
-                args.what_if = true;
-            }
-            "--check-update" => {
-                args.check_update = true;
-                args.headless = true;
-            }
-            "--format" => {
-                i += 1;
-                if i < raw.len() {
-                    args.format = match raw[i].as_str() {
-                        "json" => OutputFormat::Json,
-                        _ => OutputFormat::Human,
-                    };
-                }
-            }
-            "--headless" => {
-                args.headless = true;
-            }
+            "--auto-phase" => { i += 1; if i < raw.len() { args.headless = true; args.auto_phase = Some(raw[i].clone()); } }
+            "--what-if" => args.what_if = true,
+            "--check-update" => { args.check_update = true; args.headless = true; }
+            "--format" => { i += 1; if i < raw.len() { args.format = match raw[i].as_str() { "json" => OutputFormat::Json, _ => OutputFormat::Human }; } }
+            "--headless" => args.headless = true,
             _ => {}
         }
         i += 1;
     }
-
     args
 }
 
 #[cfg(windows)]
 fn is_admin() -> bool {
-    use windows::Win32::Foundation::BOOL;
-    use windows::Win32::Security::{
-        AllocateAndInitializeSid, CheckTokenMembership, FreeSid,
-        SID_IDENTIFIER_AUTHORITY, SECURITY_NT_AUTHORITY,
-    };
-
+    use windows::Win32::Foundation::{BOOL, PSID};
+    use windows::Win32::Security::{AllocateAndInitializeSid, CheckTokenMembership, FreeSid, SID_IDENTIFIER_AUTHORITY};
     unsafe {
-        let mut authority = SID_IDENTIFIER_AUTHORITY {
-            Value: [0, 0, 0, 0, 0, 5], // SECURITY_NT_AUTHORITY
-        };
-        let mut sid = std::ptr::null_mut();
-        let result = AllocateAndInitializeSid(
-            &mut authority,
-            2,
-            32, // SECURITY_BUILTIN_DOMAIN_RID
-            544, // DOMAIN_ALIAS_RID_ADMINS
-            0, 0, 0, 0, 0, 0,
-            &mut sid,
-        );
-        if result.is_err() {
+        let authority = SID_IDENTIFIER_AUTHORITY { Value: [0, 0, 0, 0, 0, 5] };
+        let mut sid: PSID = PSID(std::ptr::null_mut());
+        if AllocateAndInitializeSid(&authority, 2, 32, 544, 0, 0, 0, 0, 0, 0, &mut sid).is_err() {
             return false;
         }
-
         let mut member = BOOL(0);
         let _ = CheckTokenMembership(None, sid, &mut member);
-        FreeSid(sid);
-
+        let _ = FreeSid(sid);
         member.as_bool()
     }
 }
 
 #[cfg(not(windows))]
-fn is_admin() -> bool {
-    true
-}
+fn is_admin() -> bool { true }

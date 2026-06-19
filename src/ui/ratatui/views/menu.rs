@@ -1,6 +1,6 @@
 //! Tela inicial — menu principal
 
-use crate::app::state::AppState;
+use crate::app::messages::AppState;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -25,67 +25,27 @@ const MENU_ITEMS: &[(&str, &str)] = &[
 
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(2)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(3),
-        ])
+        .direction(Direction::Vertical).margin(2)
+        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(3)])
         .split(frame.area());
 
     let header = Paragraph::new(Text::from(vec![
-        Line::from(vec![
-            Span::styled("HIGHLANDER FORGE BLADE", Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(Span::styled(
-            "Manutencao Profissional do Windows",
-            Style::default().fg(Color::Gray),
-        )),
-    ]))
-    .alignment(Alignment::Center)
-    .block(Block::default().borders(Borders::BOTTOM));
-
+        Line::from(vec![Span::styled("HIGHLANDER FORGE BLADE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
+        Line::from(Span::styled("Manutencao Profissional do Windows", Style::default().fg(Color::Gray))),
+    ])).alignment(Alignment::Center).block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, chunks[0]);
 
-    let items: Vec<ListItem> = MENU_ITEMS
-        .iter()
-        .enumerate()
-        .map(|(i, (key, label))| {
-            let style = if i == state.selected_menu_item {
-                Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
+    let items: Vec<ListItem> = MENU_ITEMS.iter().enumerate().map(|(i, (key, label))| {
+        let style = if i == state.selected_menu_item {
+            Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD)
+        } else { Style::default().fg(Color::White) };
+        let content = if i == state.selected_menu_item { format!("> [{}] {}", key, label) } else { format!("  [{}] {}", key, label) };
+        ListItem::new(content).style(style)
+    }).collect();
 
-            let content = if i == state.selected_menu_item {
-                format!("> [{}] {}", key, label)
-            } else {
-                format!("  [{}] {}", key, label)
-            };
-
-            ListItem::new(content).style(style)
-        })
-        .collect();
-
-    let menu = List::new(items)
-        .block(Block::default()
-            .title("Menu Principal")
-            .borders(Borders::ALL)
-            .border_style(Color::Cyan));
-
+    let menu = List::new(items).block(Block::default().title("Menu Principal").borders(Borders::ALL).border_style(Color::Cyan));
     frame.render_widget(menu, chunks[1]);
 
-    let footer = Paragraph::new(Span::styled(
-        "Navegar: Setas | Selecionar: Enter | Sair: Q/Esc",
-        Style::default().fg(Color::Gray),
-    ))
-    .alignment(Alignment::Center);
-
+    let footer = Paragraph::new(Span::styled("Navegar: Setas | Selecionar: Enter | Sair: Q/Esc", Style::default().fg(Color::Gray))).alignment(Alignment::Center);
     frame.render_widget(footer, chunks[2]);
 }

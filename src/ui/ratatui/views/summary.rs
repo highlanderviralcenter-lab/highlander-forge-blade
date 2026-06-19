@@ -1,10 +1,8 @@
-//! Stub — implementar na Fase B completa
-use crate::app::state::AppState;
-use ratatui::{widgets::Paragraph, Frame};
+//! Tela summary
 
-pub fn render(frame: &mut Frame, _state: &mut AppState) {
-    frame.render_widget(
-        Paragraph::new("Em desenvolvimento..."),
-        frame.area(),
-    );
+use crate::app::messages::AppState;
+use ratatui::Frame;
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let _ = (frame, state);
 }

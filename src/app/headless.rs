@@ -1,6 +1,5 @@
 //! Modo headless — saida JSON parseable para RMMs/MSPs
 
-use crate::app::messages::{AppMsg, LogEntry, LogLevel};
 use crate::core::error::CoreError;
 use chrono::Utc;
 use serde::Serialize;
@@ -20,7 +19,7 @@ pub mod exit_codes {
 pub struct HeadlessOutput {
     pub version: String,
     pub machine_id: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub timestamp: chrono::DateTime<Utc>,
     pub exit_code: i32,
     pub exit_reason: String,
     pub phases: Vec<PhaseResult>,
@@ -38,12 +37,7 @@ pub struct PhaseResult {
 }
 
 #[derive(Debug, Serialize)]
-pub enum PhaseStatus {
-    Success,
-    Warning,
-    Failed,
-    Skipped,
-}
+pub enum PhaseStatus { Success, Warning, Failed, Skipped }
 
 #[derive(Debug, Serialize)]
 pub struct Summary {
@@ -56,77 +50,41 @@ pub struct Summary {
 
 pub async fn run(auto_phase: Option<String>, what_if: bool) -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::machine_id;
-
-    let machine_id = machine_id::get_or_create_machine_id()
-        .unwrap_or_else(|_| "unknown".to_string());
-
+    let machine_id = machine_id::get_or_create_machine_id().unwrap_or_else(|_| "unknown".to_string());
     let mut output = HeadlessOutput {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        machine_id,
-        timestamp: Utc::now(),
-        exit_code: exit_codes::SUCCESS,
-        exit_reason: "Iniciando execucao".to_string(),
-        phases: Vec::new(),
-        summary: Summary {
-            bytes_freed: 0,
-            services_altered: 0,
-            registry_keys_removed: 0,
-            updates_installed: 0,
-            reboot_required: false,
-        },
+        version: env!("CARGO_PKG_VERSION").to_string(), machine_id,
+        timestamp: Utc::now(), exit_code: exit_codes::SUCCESS,
+        exit_reason: "Iniciando execucao".to_string(), phases: Vec::new(),
+        summary: Summary { bytes_freed: 0, services_altered: 0, registry_keys_removed: 0, updates_installed: 0, reboot_required: false },
         logs_path: format!(r"{}\Logs", crate::app::state::BASE_DIR),
     };
-
     if what_if {
         output.exit_code = exit_codes::SIMULATION_COMPLETE;
-        output.exit_reason = "Modo simulacao — nenhuma alteracao realizada".to_string();
+        output.exit_reason = "Modo simulacao".to_string();
         print_json(&output);
         process::exit(exit_codes::SIMULATION_COMPLETE);
     }
-
     match auto_phase.as_deref() {
         Some("0") | Some("all") => {
             match run_all_phases(&mut output).await {
-                Ok(()) => {
-                    output.exit_code = exit_codes::SUCCESS;
-                    output.exit_reason = "Todas as fases concluidas com sucesso".to_string();
-                }
-                Err(e) => {
-                    output.exit_code = exit_codes::FATAL_ERROR;
-                    output.exit_reason = format!("Erro fatal: {}", e);
-                }
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Todas as fases concluidas".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Erro fatal: {}", e); }
             }
         }
         Some("1") => {
             match run_phase1(&mut output).await {
-                Ok(()) => {
-                    output.exit_code = exit_codes::SUCCESS;
-                    output.exit_reason = "Fase 1 (Auditoria) concluida".to_string();
-                }
-                Err(e) => {
-                    output.exit_code = exit_codes::FATAL_ERROR;
-                    output.exit_reason = format!("Fase 1 falhou: {}", e);
-                }
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Fase 1 concluida".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Fase 1 falhou: {}", e); }
             }
         }
         Some("5") => {
             match run_phase5(&mut output).await {
-                Ok(()) => {
-                    output.exit_code = exit_codes::SUCCESS;
-                    output.exit_reason = "Fase 5 (Pos-reboot) concluida".to_string();
-                }
-                Err(e) => {
-                    output.exit_code = exit_codes::FATAL_ERROR;
-                    output.exit_reason = format!("Fase 5 falhou: {}", e);
-                }
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Fase 5 concluida".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Fase 5 falhou: {}", e); }
             }
         }
-        _ => {
-            output.exit_code = exit_codes::FATAL_ERROR;
-            output.exit_reason = "Fase invalida ou nao especificada".to_string();
-        }
+        _ => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = "Fase invalida".to_string(); }
     }
-
     print_json(&output);
     process::exit(output.exit_code);
 }
@@ -134,24 +92,10 @@ pub async fn run(auto_phase: Option<String>, what_if: bool) -> Result<(), Box<dy
 async fn run_all_phases(output: &mut HeadlessOutput) -> Result<(), CoreError> {
     let start = std::time::Instant::now();
     run_phase1(output).await?;
-    output.phases.push(PhaseResult {
-        phase: "1".to_string(),
-        name: "Auditoria".to_string(),
-        status: PhaseStatus::Success,
-        duration_seconds: start.elapsed().as_secs(),
-        details: serde_json::json!({}),
-    });
-
+    output.phases.push(PhaseResult { phase: "1".to_string(), name: "Auditoria".to_string(), status: PhaseStatus::Success, duration_seconds: start.elapsed().as_secs(), details: serde_json::json!({}) });
     let start = std::time::Instant::now();
     run_phase3(output).await?;
-    output.phases.push(PhaseResult {
-        phase: "3".to_string(),
-        name: "Limpeza".to_string(),
-        status: PhaseStatus::Success,
-        duration_seconds: start.elapsed().as_secs(),
-        details: serde_json::json!({}),
-    });
-
+    output.phases.push(PhaseResult { phase: "3".to_string(), name: "Limpeza".to_string(), status: PhaseStatus::Success, duration_seconds: start.elapsed().as_secs(), details: serde_json::json!({}) });
     output.summary.reboot_required = true;
     Ok(())
 }
@@ -161,13 +105,11 @@ async fn run_phase1(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     Ok(())
 }
-
 async fn run_phase3(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
     tracing::info!("Executando Fase 3: Limpeza");
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     Ok(())
 }
-
 async fn run_phase5(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
     tracing::info!("Executando Fase 5: Pos-reboot");
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -177,8 +119,6 @@ async fn run_phase5(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
 fn print_json(output: &HeadlessOutput) {
     match serde_json::to_string_pretty(output) {
         Ok(json) => println!("{}", json),
-        Err(e) => {
-            eprintln!("{{"error":"Falha ao serializar saida: {}"}}", e);
-        }
+        Err(e) => eprintln!("{{\"error\":\"Falha ao serializar: {}\"}}", e),
     }
 }

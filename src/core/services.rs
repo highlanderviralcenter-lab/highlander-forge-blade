@@ -1,1 +1,1 @@
-//! Controle de servicos Windows
+//! Services

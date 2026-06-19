@@ -7,7 +7,7 @@ mod summary;
 mod confirm;
 mod report;
 
-use crate::app::state::{AppState, Screen};
+use crate::app::messages::{AppState, Screen};
 use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, state: &mut AppState) {

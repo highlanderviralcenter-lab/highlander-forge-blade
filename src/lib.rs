@@ -1,15 +1,12 @@
+//! Highlander Forge Blade v3.0.0
+//! Engine Rust de manutencao profissional do Windows
+
 pub mod app;
-pub mod core;
 pub mod config;
+pub mod core;
 pub mod logging;
-pub mod update;
+pub mod platform;
+pub mod ui;
 pub mod utils;
 
-#[cfg(feature = "tui")]
-pub mod ui;
-
-#[cfg(all(feature = "gui", not(feature = "tui")))]
-pub mod ui;
-
-pub use app::state::AppState;
-pub use app::messages::AppMsg;
+pub use app::messages::AppState;
