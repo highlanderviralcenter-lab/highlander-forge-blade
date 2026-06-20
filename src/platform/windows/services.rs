@@ -37,8 +37,8 @@ impl ServiceProvider for WinServiceProvider {
             } else if trimmed.starts_with("DISPLAY_NAME:") {
                 current_display = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
             } else if trimmed.starts_with("STATE") {
-                if let Some(idx) = trimmed.find("4  RUNNING") { current_state = "Running".to_string(); }
-                else if let Some(idx) = trimmed.find("1  STOPPED") { current_state = "Stopped".to_string(); }
+                if let Some(_idx) = trimmed.find("4  RUNNING") { current_state = "Running".to_string(); }
+                else if let Some(_idx) = trimmed.find("1  STOPPED") { current_state = "Stopped".to_string(); }
                 else { current_state = "Unknown".to_string(); }
             }
         }
@@ -91,3 +91,4 @@ impl ServiceProvider for WinServiceProvider {
         Ok(())
     }
 }
+
