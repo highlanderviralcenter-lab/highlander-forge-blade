@@ -82,10 +82,15 @@ fn is_admin() -> bool {
     use windows::Win32::Security::{AllocateAndInitializeSid, CheckTokenMembership, FreeSid, SID_IDENTIFIER_AUTHORITY};
     unsafe {
         let authority = SID_IDENTIFIER_AUTHORITY { Value: [0, 0, 0, 0, 0, 5] };
-        let mut sid: PSID = PSID(std::ptr::null_mut());
-        if AllocateAndInitializeSid(&authority, 2, 32, 544, 0, 0, 0, 0, 0, 0, &mut sid).is_err() {
+        let mut sid_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        let result = AllocateAndInitializeSid(
+            &authority, 2, 32, 544, 0, 0, 0, 0, 0, 0,
+            &mut sid_ptr as *mut _ as *mut PSID
+        );
+        if result.is_err() {
             return false;
         }
+        let sid = PSID(sid_ptr);
         let mut member = BOOL(0);
         let _ = CheckTokenMembership(None, sid, &mut member);
         let _ = FreeSid(sid);

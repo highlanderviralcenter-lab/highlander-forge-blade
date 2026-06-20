@@ -30,6 +30,16 @@ pub trait ServiceProvider: Send + Sync {
     fn start(&self, name: &str) -> Result<(), CoreError>;
 }
 
+// NOVO: CleanupProvider — necessario para core/cleanup.rs
+#[cfg_attr(test, mockall::automock)]
+pub trait CleanupProvider: Send + Sync {
+    fn clean_temp_files(&self) -> Result<u64, CoreError>;
+    fn clean_recycle_bin(&self) -> Result<u64, CoreError>;
+    fn clean_browser_cache(&self) -> Result<u64, CoreError>;
+    fn run_dism(&self) -> Result<(), CoreError>;
+    fn run_sfc(&self) -> Result<(), CoreError>;
+}
+
 #[cfg_attr(test, mockall::automock)]
 pub trait UpdateProvider: Send + Sync {
     fn search_pending(&self) -> Result<Vec<String>, CoreError>;
@@ -37,7 +47,7 @@ pub trait UpdateProvider: Send + Sync {
     fn get_history(&self, limit: u32) -> Result<Vec<String>, CoreError>;
 }
 
-/// Fábrica que cria implementacoes REAIS. Testes injetam mocks diretamente.
+/// Fabrica que cria implementacoes REAIS. Testes injetam mocks diretamente.
 pub struct ProviderFactory;
 
 impl ProviderFactory {
@@ -52,5 +62,9 @@ impl ProviderFactory {
     }
     pub fn updates() -> Box<dyn UpdateProvider> {
         Box::new(crate::platform::windows::updates::WuaUpdateProvider::new())
+    }
+    // NOVO
+    pub fn cleanup() -> Box<dyn CleanupProvider> {
+        Box::new(crate::core::cleanup::WinCleanupProvider::new())
     }
 }

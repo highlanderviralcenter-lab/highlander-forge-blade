@@ -1,4 +1,4 @@
-//! Mensagens do sistema — canal unico entre async tasks e UI
+//! Mensagens do sistema
 
 use crate::core::error::CoreError;
 use chrono::{DateTime, Utc};
@@ -6,12 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub enum AppMsg {
-    Tick,
-    Shutdown,
-    NavigateUp,
-    NavigateDown,
-    Select,
-    Back,
+    Tick, Shutdown, NavigateUp, NavigateDown, Select, Back,
     AuditStarted,
     AuditProgress { phase: AuditPhase, item: String, percent: u8 },
     AuditCompleted(Box<AuditData>),
@@ -22,8 +17,7 @@ pub enum AppMsg {
     CleanupProgress { operation: CleanupOp, detail: String, percent: u8, bytes_freed: u64 },
     CleanupCompleted,
     CleanupFailed(CoreError),
-    RebootScheduled,
-    RebootCancelled,
+    RebootScheduled, RebootCancelled,
     PostRebootStarted,
     PostRebootProgress { tool: RepairTool, percent: u8, detail: String },
     PostRebootCompleted,
@@ -87,18 +81,12 @@ pub enum RepairTool { Sfc, Dism, Chkdsk }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportFormat { Html, Txt, Json }
 
-// === AUDIT DATA com Serialize/Deserialize ===
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditData {
-    pub cpu: Option<CpuInfo>,
-    pub memory: Option<MemoryInfo>,
-    pub disks: Vec<DiskInfo>,
-    pub gpus: Vec<GpuInfo>,
-    pub motherboard: Option<MotherboardInfo>,
-    pub temperatures: Vec<TemperatureReading>,
-    pub software: Vec<SoftwareInfo>,
-    pub services: Vec<ServiceInfo>,
-    pub registry_run_keys: Vec<RunKey>,
+    pub cpu: Option<CpuInfo>, pub memory: Option<MemoryInfo>, pub disks: Vec<DiskInfo>,
+    pub gpus: Vec<GpuInfo>, pub motherboard: Option<MotherboardInfo>,
+    pub temperatures: Vec<TemperatureReading>, pub software: Vec<SoftwareInfo>,
+    pub services: Vec<ServiceInfo>, pub registry_run_keys: Vec<RunKey>,
     pub environment: EnvironmentVars,
 }
 
@@ -110,8 +98,7 @@ pub struct CpuInfo {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryInfo {
-    pub total_bytes: u64,
-    pub modules: Vec<MemoryModule>,
+    pub total_bytes: u64, pub modules: Vec<MemoryModule>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -161,25 +148,18 @@ pub struct RunKey {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnvironmentVars {
-    pub system: Vec<(String, String)>,
-    pub user: Vec<(String, String)>,
+    pub system: Vec<(String, String)>, pub user: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 pub enum StateError {
-    #[error("Arquivo de estado nao encontrado")]
-    NotFound,
-    #[error("Erro de IO: {0}")]
-    Io(String),
-    #[error("Erro de parse JSON: {0}")]
-    Parse(String),
-    #[error("Versao de schema nao suportada: {0}")]
-    UnsupportedVersion(u32),
-    #[error("Checksum invalido")]
-    InvalidChecksum,
+    #[error("Arquivo de estado nao encontrado")] NotFound,
+    #[error("Erro de IO: {0}")] Io(String),
+    #[error("Erro de parse JSON: {0}")] Parse(String),
+    #[error("Versao de schema nao suportada: {0}")] UnsupportedVersion(u32),
+    #[error("Checksum invalido")] InvalidChecksum,
 }
 
-// === APP STATE & SCREEN ===
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
     pub current_screen: Screen,
@@ -198,12 +178,21 @@ impl AppState {
             AppMsg::Tick => {}
             AppMsg::NavigateUp => { if self.selected_menu_item > 0 { self.selected_menu_item -= 1; } }
             AppMsg::NavigateDown => { if self.selected_menu_item < 10 { self.selected_menu_item += 1; } }
-            AppMsg::Select => { self.status_message = format!("Selecionado item {}", self.selected_menu_item); }
+            AppMsg::Select => self.handle_menu_select(),
             AppMsg::Back => { self.current_screen = Screen::Menu; }
             AppMsg::AuditStarted => { self.current_screen = Screen::AuditProgress; self.progress = 0.0; }
+            AppMsg::AuditProgress { percent, ref item, .. } => {
+                self.progress = percent as f32;
+                self.status_message = format!("Coletando: {}", item);
+                self.logs.push(LogEntry::info("audit", format!("{} - {}%", item, percent)));
+            }
             AppMsg::AuditCompleted(data) => { self.audit_data = Some(data); self.current_screen = Screen::Summary; self.progress = 100.0; }
             AppMsg::AuditFailed(ref err) => { self.status_message = format!("Erro: {}", err); self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err))); }
             AppMsg::CleanupStarted => { self.current_screen = Screen::CleanupProgress; self.progress = 0.0; }
+            AppMsg::CleanupProgress { percent, ref detail, bytes_freed, .. } => {
+                self.progress = percent as f32;
+                self.status_message = format!("{} ({} bytes liberados)", detail, bytes_freed);
+            }
             AppMsg::CleanupCompleted => { self.current_screen = Screen::RebootConfirm; self.progress = 100.0; }
             AppMsg::UserConfirmed(true) => { self.current_screen = Screen::PostRebootProgress; }
             AppMsg::UserConfirmed(false) => { self.current_screen = Screen::Menu; }
@@ -221,17 +210,30 @@ impl AppState {
             _ => {}
         }
     }
+
+    fn handle_menu_select(&mut self) {
+        match self.selected_menu_item {
+            0 | 1 => { self.current_screen = Screen::AuditProgress; self.progress = 0.0; }
+            2 | 3 => {
+                if self.audit_data.is_some() { self.current_screen = Screen::Summary; }
+                else { self.status_message = "Execute Fase 1 primeiro".to_string(); self.logs.push(LogEntry::warn("Execute Fase 1 primeiro")); }
+            }
+            4 | 5 => { self.current_screen = Screen::CleanupProgress; self.progress = 0.0; }
+            6 | 7 => { self.current_screen = Screen::RebootConfirm; }
+            8 => { self.current_screen = Screen::PostRebootProgress; self.progress = 0.0; }
+            9 => {
+                if self.audit_data.is_some() { self.current_screen = Screen::ReportView; }
+                else { self.status_message = "Nenhum dado de auditoria".to_string(); self.logs.push(LogEntry::warn("Execute Fase 1 primeiro")); }
+            }
+            10 => { self.logs.push(LogEntry::info("menu", "Saindo...")); }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
-    #[default]
-    Menu,
-    AuditProgress,
-    Summary,
-    CleanupProgress,
-    RebootConfirm,
-    PostRebootProgress,
-    ReportView,
-    LogsView,
+    #[default] Menu,
+    AuditProgress, Summary, CleanupProgress, RebootConfirm,
+    PostRebootProgress, ReportView, LogsView,
 }

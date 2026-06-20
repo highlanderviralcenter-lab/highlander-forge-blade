@@ -66,13 +66,15 @@ impl<'a> Auditor<'a> {
                     for subkey in subkeys {
                         let full_path = format!("{}\\{}", path, subkey);
                         if let Ok(name) = self.reg.read_key(&full_path, "DisplayName") {
-                            software.push(SoftwareInfo {
-                                display_name: name,
-                                display_version: self.reg.read_key(&full_path, "DisplayVersion").unwrap_or_default(),
-                                publisher: self.reg.read_key(&full_path, "Publisher").unwrap_or_default(),
-                                install_date: self.reg.read_key(&full_path, "InstallDate").unwrap_or_default(),
-                                install_location: self.reg.read_key(&full_path, "InstallLocation").unwrap_or_default(),
-                            });
+                            if !name.is_empty() {
+                                software.push(SoftwareInfo {
+                                    display_name: name,
+                                    display_version: self.reg.read_key(&full_path, "DisplayVersion").unwrap_or_default(),
+                                    publisher: self.reg.read_key(&full_path, "Publisher").unwrap_or_default(),
+                                    install_date: self.reg.read_key(&full_path, "InstallDate").unwrap_or_default(),
+                                    install_location: self.reg.read_key(&full_path, "InstallLocation").unwrap_or_default(),
+                                });
+                            }
                         }
                     }
                 }
@@ -93,7 +95,9 @@ impl<'a> Auditor<'a> {
         for (hive, path) in &paths {
             if let Ok(values) = self.reg.enum_values(path) {
                 for (name, value) in values {
-                    keys.push(RunKey { hive: hive.to_string(), name, value });
+                    if !name.is_empty() && !value.is_empty() {
+                        keys.push(RunKey { hive: hive.to_string(), name, value });
+                    }
                 }
             }
         }

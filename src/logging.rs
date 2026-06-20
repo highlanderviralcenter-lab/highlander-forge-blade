@@ -1,7 +1,7 @@
 //! Logging dual-mode: humano (TUI) e JSON (headless)
 
 use tracing_subscriber::{
-    fmt::{self, format::FmtSpan},
+    fmt::{self},
     layer::SubscriberExt,
     util::SubscriberInitExt,
     EnvFilter,
