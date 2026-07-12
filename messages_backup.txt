@@ -181,58 +181,36 @@ impl AppState {
             AppMsg::Select => self.handle_menu_select(),
             AppMsg::Back => { self.current_screen = Screen::Menu; }
             AppMsg::AuditStarted => {
+                std::fs::OpenOptions::new().append(true).create(true).open(r"C:\highlander-forge-blade\debug.log").unwrap().write_all, "HANDLER AuditStarted\n").unwrap();
                 self.current_screen = Screen::AuditProgress;
                 self.progress = 0.0;
-                self.status_message = "Iniciando auditoria...".to_string();
             }
             AppMsg::AuditProgress { percent, ref item, .. } => {
-                // DEBUG: confirma que o valor esta chegando e sendo aplicado
-                tracing::debug!(target: "hfb_state", "AuditProgress handler: item={} percent={} -> progress={}", item, percent, percent as f32);
+                std::fs::OpenOptions::new().append(true).create(true).open(r"C:\highlander-forge-blade\debug.log").unwrap().write_all, format!("HANDLER AuditProgress {}% item={}\n", percent, item)).unwrap();
                 self.progress = percent as f32;
                 self.status_message = format!("Coletando: {}", item);
                 self.logs.push(LogEntry::info("audit", format!("{} - {}%", item, percent)));
             }
             AppMsg::AuditCompleted(data) => {
+                std::fs::OpenOptions::new().append(true).create(true).open(r"C:\highlander-forge-blade\debug.log").unwrap().write_all, "HANDLER AuditCompleted\n").unwrap();
                 self.audit_data = Some(data);
                 self.current_screen = Screen::Summary;
                 self.progress = 100.0;
-                self.status_message = "Auditoria concluida!".to_string();
             }
-            AppMsg::AuditFailed(ref err) => {
-                self.status_message = format!("Erro: {}", err);
-                self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err)));
-            }
-            AppMsg::CleanupStarted => {
-                self.current_screen = Screen::CleanupProgress;
-                self.progress = 0.0;
-            }
+            AppMsg::AuditFailed(ref err) => { self.status_message = format!("Erro: {}", err); self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err))); }
+            AppMsg::CleanupStarted => { self.current_screen = Screen::CleanupProgress; self.progress = 0.0; }
             AppMsg::CleanupProgress { percent, ref detail, bytes_freed, .. } => {
                 self.progress = percent as f32;
                 self.status_message = format!("{} ({} bytes liberados)", detail, bytes_freed);
             }
-            AppMsg::CleanupCompleted => {
-                self.current_screen = Screen::RebootConfirm;
-                self.progress = 100.0;
-            }
+            AppMsg::CleanupCompleted => { self.current_screen = Screen::RebootConfirm; self.progress = 100.0; }
             AppMsg::UserConfirmed(true) => { self.current_screen = Screen::PostRebootProgress; }
             AppMsg::UserConfirmed(false) => { self.current_screen = Screen::Menu; }
-            AppMsg::PostRebootStarted => {
-                self.current_screen = Screen::PostRebootProgress;
-                self.progress = 0.0;
-            }
-            AppMsg::PostRebootCompleted => {
-                self.current_screen = Screen::ReportView;
-                self.progress = 100.0;
-            }
+            AppMsg::PostRebootStarted => { self.current_screen = Screen::PostRebootProgress; self.progress = 0.0; }
+            AppMsg::PostRebootCompleted => { self.current_screen = Screen::ReportView; self.progress = 100.0; }
             AppMsg::ReportGenerated(_) => { self.current_screen = Screen::ReportView; }
-            AppMsg::LogLine(entry) => {
-                self.logs.push(entry);
-                if self.logs.len() > 500 { self.logs.remove(0); }
-            }
-            AppMsg::Error(ref err) => {
-                self.status_message = format!("Erro: {}", err);
-                self.logs.push(LogEntry::warn(format!("Erro: {}", err)));
-            }
+            AppMsg::LogLine(entry) => { self.logs.push(entry); if self.logs.len() > 500 { self.logs.remove(0); } }
+            AppMsg::Error(ref err) => { self.status_message = format!("Erro: {}", err); self.logs.push(LogEntry::warn(format!("Erro: {}", err))); }
             AppMsg::StateSaved => { self.status_message = "Estado salvo".to_string(); }
             AppMsg::StateLoaded(Ok(_)) => { self.status_message = "Estado carregado".to_string(); }
             AppMsg::StateLoaded(Err(ref e)) => { self.status_message = format!("Erro ao carregar: {}", e); }
@@ -245,7 +223,7 @@ impl AppState {
 
     fn handle_menu_select(&mut self) {
         match self.selected_menu_item {
-            0 | 1 => { /* Audit iniciada pelo app.rs */ }
+            0 | 1 => { self.current_screen = Screen::AuditProgress; }
             2 | 3 => {
                 if self.audit_data.is_some() { self.current_screen = Screen::Summary; }
                 else { self.status_message = "Execute Fase 1 primeiro".to_string(); self.logs.push(LogEntry::warn("Execute Fase 1 primeiro")); }
@@ -269,4 +247,10 @@ pub enum Screen {
     AuditProgress, Summary, CleanupProgress, RebootConfirm,
     PostRebootProgress, ReportView, LogsView,
 }
+
+
+
+
+
+
 

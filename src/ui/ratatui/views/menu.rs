@@ -1,4 +1,4 @@
-//! Tela inicial — menu principal
+﻿//! Tela inicial — menu principal
 
 use crate::app::messages::AppState;
 use ratatui::{

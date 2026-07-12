@@ -1,15 +1,15 @@
-//! Tela de confirmacao — Sim/Nao para reboot
+﻿//! Tela de confirmacao â€” Sim/Nao para reboot
 
 use crate::app::messages::AppState;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
-pub fn render(frame: &mut Frame, state: &mut AppState) {
+pub fn render(frame: &mut Frame, __state: &mut AppState) {
     let area = frame.area();
 
     // Layout vertical: header, conteudo central, footer
@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let header = Paragraph::new(Text::from(vec![
         Line::from(vec![
             Span::styled("FASE 4", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(" — Confirmacao de Reinicializacao"),
+            Span::raw(" â€” Confirmacao de Reinicializacao"),
         ]),
     ]))
     .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));

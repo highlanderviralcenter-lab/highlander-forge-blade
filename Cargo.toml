@@ -2,7 +2,7 @@
 name = "highlander-forge-blade"
 version = "3.0.0-alpha.1"
 edition = "2021"
-authors = ["Highlander Forge <dev@hfb.dev>"]
+authors = ["Highlander Forge <highlander.viralcenter@gmail.com>"]
 description = "Manutencao profissional do Windows — engine Rust, UI TUI/GUI"
 license = "MIT OR proprietary"
 repository = "https://github.com/highlanderviralcenter-lab/highlander-forge-blade"

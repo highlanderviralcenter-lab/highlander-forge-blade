@@ -1,0 +1,47 @@
+// Dentro da funcao main ou do setup do TUI:
+
+use tokio::sync::mpsc;
+use crate::app::messages::Message;
+use crate::core::audit::{Auditor, AuditData};
+use crate::core::traits::ProviderFactory;
+use crate::platform::windows::wmi::WmiSystemInfoProvider;
+
+let (tx_ui, rx_ui) = mpsc::channel::<Message>(256);
+let tx_core = tx_ui.clone();
+
+// Spawn da task async que executa a auditoria
+let audit_handle = tokio::spawn(async move {
+    let mut rx = rx_ui; // ou use um canal separado para comandos
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Message::StartAudit => {
+                let provider = WmiSystemInfoProvider::new();
+                let auditor = Auditor::new(Box::new(provider));
+
+                // Envia progresso
+                let _ = tx_core.send(Message::AuditProgress {
+                    phase: "Coletando CPU...".to_string(),
+                    percent: 10,
+                    log: "Iniciando coleta de CPU via WMI...".to_string(),
+                }).await;
+
+                match auditor.run_full_audit().await {
+                    Ok(data) => {
+                        let _ = tx_core.send(Message::AuditComplete(data)).await;
+                    }
+                    Err(e) => {
+                        let _ = tx_core.send(Message::AuditError(e.to_string())).await;
+                    }
+                }
+            }
+            Message::StartCleanup => {
+                // Implementar cleanup
+                let _ = tx_core.send(Message::CleanupComplete).await;
+            }
+            _ => {}
+        }
+    }
+});
+
+// Inicia o TUI passando tx_ui para enviar comandos e rx_ui para receber resultados
+ui::ratatui::run_tui(rx_ui, tx_ui).await?;

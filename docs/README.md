@@ -70,7 +70,8 @@ hfb --auto-phase 1  # Audit only
 
 ```powershell
 # Full maintenance, JSON output
-hfb --auto-phase 0 --format=json --output="C:\Tempesult.json"
+hfb --auto-phase 0 --format=json --output="C:\Temp
+esult.json"
 
 # Simulation (preview without changes)
 hfb --what-if
@@ -213,6 +214,6 @@ Built with:
   <strong>🗡️ Highlander Forge Blade</strong><br>
   <em>Professional Windows Maintenance</em><br>
   <a href="https://github.com/highlanderviralcenter-lab/highlander-forge-blade">GitHub</a> •
-  <a href="https://docs.hfb.dev">Documentation</a> •
-  <a href="https://discord.gg/hfb">Discord</a>
+  <a href="https://github.com/highlanderviralcenter-lab/highlander-forge-blade/tree/main/docs">Documentation</a> •
+  <a href="">Discord</a>
 </p>

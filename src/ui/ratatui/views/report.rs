@@ -1,8 +1,8 @@
-//! Tela de relatorio — exibe dados da auditoria em formato texto
+﻿//! Tela de relatorio â€” exibe dados da auditoria em formato texto
 
 use crate::app::messages::AppState;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let header = Paragraph::new(Text::from(vec![
         Line::from(vec![
             Span::styled("RELATORIO", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(" — Dados Coletados na Auditoria"),
+            Span::raw(" â€” Dados Coletados na Auditoria"),
         ]),
     ]))
     .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
@@ -82,7 +82,7 @@ fn build_report_text(audit: &crate::app::messages::AuditData) -> Text<'_> {
         for (i, m) in mem.modules.iter().enumerate() {
             let cap_gb = m.capacity_bytes as f64 / 1_073_741_824.0;
             lines.push(Line::from(format!(
-                "  Slot {}: {:.1} GB @ {} MHz — {}",
+                "  Slot {}: {:.1} GB @ {} MHz â€” {}",
                 i + 1, cap_gb, m.speed_mhz, m.manufacturer
             )));
         }
@@ -100,7 +100,7 @@ fn build_report_text(audit: &crate::app::messages::AuditData) -> Text<'_> {
             let total_gb = d.total_bytes as f64 / 1_073_741_824.0;
             let free_gb = d.free_bytes as f64 / 1_073_741_824.0;
             lines.push(Line::from(format!(
-                "  {} ({}) — {:.0} GB total, {:.1} GB livre ({:.1}%)",
+                "  {} ({}) â€” {:.0} GB total, {:.1} GB livre ({:.1}%)",
                 d.volume_name, d.filesystem, total_gb, free_gb, d.percent_free
             )));
         }

@@ -1,8 +1,8 @@
-//! Tela de logs — exibe todos os logs do sistema com scroll
+﻿//! Tela de logs â€” exibe todos os logs do sistema com scroll
 
 use crate::app::messages::{AppState, LogLevel};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let header = Paragraph::new(Text::from(vec![
         Line::from(vec![
             Span::styled("LOGS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(" — {} entradas", state.logs.len())),
+            Span::raw(format!(" â€” {} entradas", state.logs.len())),
         ]),
     ]))
     .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
