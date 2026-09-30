@@ -170,14 +170,21 @@ pub struct AppState {
     pub status_message: String,
     pub is_simulation: bool,
     pub phases_completed: Vec<String>,
+    /// Bytes efetivamente liberados acumulados na sessao (Fase 3).
+    pub bytes_freed_total: u64,
 }
 
 impl AppState {
     pub fn update(&mut self, msg: AppMsg) {
         match msg {
             AppMsg::Tick => {}
+            // Limite real do menu (MENU_ITEM_COUNT itens) — antes hardcoded `< 10`.
             AppMsg::NavigateUp => { if self.selected_menu_item > 0 { self.selected_menu_item -= 1; } }
-            AppMsg::NavigateDown => { if self.selected_menu_item < 10 { self.selected_menu_item += 1; } }
+            AppMsg::NavigateDown => {
+                if self.selected_menu_item + 1 < crate::MENU_ITEM_COUNT {
+                    self.selected_menu_item += 1;
+                }
+            }
             AppMsg::Select => self.handle_menu_select(),
             AppMsg::Back => { self.current_screen = Screen::Menu; }
             AppMsg::AuditStarted => {
@@ -186,8 +193,7 @@ impl AppState {
                 self.status_message = "Iniciando auditoria...".to_string();
             }
             AppMsg::AuditProgress { percent, ref item, .. } => {
-                // DEBUG: confirma que o valor esta chegando e sendo aplicado
-                tracing::debug!(target: "hfb_state", "AuditProgress handler: item={} percent={} -> progress={}", item, percent, percent as f32);
+                tracing::debug!(target: "hfb_state", "AuditProgress handler: item={} percent={}", item, percent);
                 self.progress = percent as f32;
                 self.status_message = format!("Coletando: {}", item);
                 self.logs.push(LogEntry::info("audit", format!("{} - {}%", item, percent)));
@@ -197,32 +203,69 @@ impl AppState {
                 self.current_screen = Screen::Summary;
                 self.progress = 100.0;
                 self.status_message = "Auditoria concluida!".to_string();
+                if !self.phases_completed.iter().any(|p| p == "1") {
+                    self.phases_completed.push("1".to_string());
+                }
             }
             AppMsg::AuditFailed(ref err) => {
+                self.current_screen = Screen::Menu;
                 self.status_message = format!("Erro: {}", err);
                 self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err)));
             }
             AppMsg::CleanupStarted => {
                 self.current_screen = Screen::CleanupProgress;
                 self.progress = 0.0;
+                self.bytes_freed_total = 0;
             }
             AppMsg::CleanupProgress { percent, ref detail, bytes_freed, .. } => {
                 self.progress = percent as f32;
-                self.status_message = format!("{} ({} bytes liberados)", detail, bytes_freed);
+                self.bytes_freed_total = self.bytes_freed_total.max(bytes_freed);
+                self.status_message = format!("{} ({} MB liberados)", detail, bytes_freed / 1_048_576);
             }
             AppMsg::CleanupCompleted => {
                 self.current_screen = Screen::RebootConfirm;
                 self.progress = 100.0;
+                self.status_message = format!("Limpeza concluida: {} MB liberados", self.bytes_freed_total / 1_048_576);
+                if !self.phases_completed.iter().any(|p| p == "3") {
+                    self.phases_completed.push("3".to_string());
+                }
+            }
+            AppMsg::CleanupFailed(ref err) => {
+                self.current_screen = Screen::Menu;
+                self.status_message = format!("Limpeza falhou: {}", err);
+                self.logs.push(LogEntry::warn(format!("Limpeza falhou: {}", err)));
             }
             AppMsg::UserConfirmed(true) => { self.current_screen = Screen::PostRebootProgress; }
             AppMsg::UserConfirmed(false) => { self.current_screen = Screen::Menu; }
+            AppMsg::RebootScheduled => {
+                self.status_message = "Reinicializacao agendada".to_string();
+                self.logs.push(LogEntry::success("Reinicializacao agendada para 15s"));
+                if !self.phases_completed.iter().any(|p| p == "4") {
+                    self.phases_completed.push("4".to_string());
+                }
+            }
+            AppMsg::RebootCancelled => {
+                self.status_message = "Reinicializacao cancelada".to_string();
+                self.logs.push(LogEntry::warn("Reinicializacao cancelada pelo usuario"));
+            }
             AppMsg::PostRebootStarted => {
                 self.current_screen = Screen::PostRebootProgress;
                 self.progress = 0.0;
             }
+            AppMsg::PostRebootProgress { percent, ref detail, .. } => {
+                self.progress = percent as f32;
+                self.status_message = detail.clone();
+            }
             AppMsg::PostRebootCompleted => {
                 self.current_screen = Screen::ReportView;
                 self.progress = 100.0;
+                if !self.phases_completed.iter().any(|p| p == "5") {
+                    self.phases_completed.push("5".to_string());
+                }
+            }
+            AppMsg::PostRebootFailed(ref err) => {
+                self.status_message = format!("Pos-reboot falhou: {}", err);
+                self.logs.push(LogEntry::warn(format!("Pos-reboot falhou: {}", err)));
             }
             AppMsg::ReportGenerated(_) => { self.current_screen = Screen::ReportView; }
             AppMsg::LogLine(entry) => {
@@ -234,12 +277,16 @@ impl AppState {
                 self.logs.push(LogEntry::warn(format!("Erro: {}", err)));
             }
             AppMsg::StateSaved => { self.status_message = "Estado salvo".to_string(); }
-            AppMsg::StateLoaded(Ok(_)) => { self.status_message = "Estado carregado".to_string(); }
+            AppMsg::StateLoaded(Ok(state)) => {
+                self.status_message = "Estado carregado".to_string();
+                if state.audit_data.is_some() { self.audit_data = state.audit_data; }
+                self.phases_completed = state.phases_executed;
+            }
             AppMsg::StateLoaded(Err(ref e)) => { self.status_message = format!("Erro ao carregar: {}", e); }
             AppMsg::UpdateAvailable(ref v) => { self.status_message = format!("Update {} disponivel", v); }
             AppMsg::UpdateNotAvailable => { self.status_message = "Nenhum update".to_string(); }
             AppMsg::UpdateFailed(ref err) => { self.status_message = format!("Falha no update: {}", err); }
-            _ => {}
+            AppMsg::Shutdown => {}
         }
     }
 
