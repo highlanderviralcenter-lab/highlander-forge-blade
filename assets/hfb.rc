@@ -1,0 +1,3 @@
+#include <winuser.h>
+// Manifest de elevacao (requireAdministrator) embutido como RT_MANIFEST = 1
+1 RT_MANIFEST "hfb.exe.manifest"

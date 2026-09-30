@@ -1,15 +1,2 @@
-/target
-.idea/
-.vscode/
-*.iml
-*.pem
-*privkey*
-*.key
-estado_manutencao.json
-machine_id
-*.log
-Logs/
-*.bak
-*.tmp
-.DS_Store
-Thumbs.db
+# Rust build artifacts
+target/
