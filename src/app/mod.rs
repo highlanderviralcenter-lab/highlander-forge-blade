@@ -12,4 +12,4 @@ pub use messages::{
     CleanupOp, RepairTool, ReportFormat, StateError,
     CpuInfo, MemoryInfo, MemoryModule, DiskInfo, GpuInfo, MotherboardInfo,
 };
-pub use state::{load_state, save_state, StateFile, CleanupData, BASE_DIR};
+pub use state::{load_state, save_state, StateFile, CleanupData};

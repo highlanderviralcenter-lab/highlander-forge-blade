@@ -98,6 +98,112 @@ fn crc32(data: &str) -> u32 {
     !crc
 }
 
+// ── Flag de pos-reboot (Fase 4 -> Fase 5) ───────────────────────────
+// A flag e o contrato entre a execucao que agendou o reboot e a sessao apos o
+// boot. Em Windows, um valor RunOnce aponta para `hfb --phase 5` registrar a
+// continuacao; fora do Windows a flag persiste apenas em disco (CI/testes).
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostRebootFlag {
+    pub created_at: DateTime<Utc>,
+    pub app_version: String,
+    pub phases_pending: Vec<String>,
+}
+
+impl PostRebootFlag {
+    pub fn new(app_version: &str) -> Self {
+        Self {
+            created_at: Utc::now(),
+            app_version: app_version.to_string(),
+            phases_pending: vec!["5".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FlagError {
+    #[error("erro de IO: {0}")]
+    Io(String),
+    #[error("falha de serializacao: {0}")]
+    Serde(String),
+}
+
+pub fn write_post_reboot_flag(cfg: &Config, flag: &PostRebootFlag) -> Result<(), FlagError> {
+    let path = cfg.post_reboot_flag_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| FlagError::Io(e.to_string()))?;
+    }
+    let json = serde_json::to_string_pretty(flag).map_err(|e| FlagError::Serde(e.to_string()))?;
+    std::fs::write(&path, json).map_err(|e| FlagError::Io(e.to_string()))?;
+
+    #[cfg(windows)]
+    {
+        // Registro RunOnce com caminho EXPLICITO do exe atual (bug antigo:
+        // `%~dp0ManutencaoWindows.exe` nome hardcoded desatualizado).
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "highlander-forge-blade.exe".to_string());
+        match win_reg_run_once(&format!(r#"\"{}" --headless --phase 5"#, exe)) {
+            Ok(()) => {}
+            Err(e) => tracing::warn!("Falha ao registrar RunOnce pos-reboot: {}", e),
+        }
+    }
+    Ok(())
+}
+
+pub fn read_post_reboot_flag(cfg: &Config) -> Option<PostRebootFlag> {
+    let path = cfg.post_reboot_flag_path();
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+pub fn clear_post_reboot_flag(cfg: &Config) -> Result<(), FlagError> {
+    let path = cfg.post_reboot_flag_path();
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| FlagError::Io(e.to_string()))?;
+    }
+    #[cfg(windows)]
+    {
+        let _ = win_reg_delete_run_once();
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn win_reg_run_once(command: &str) -> Result<(), FlagError> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
+    };
+    unsafe {
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        let sub: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+            .encode_utf16().chain(std::iter::once(0)).collect();
+        RegCreateKeyExW(HKEY_CURRENT_USER, PCWSTR(sub.as_ptr()), 0, PCWSTR::null(),
+            windows::Win32::System::Registry::REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE, None, &mut hkey, None)
+            .map_err(|e| FlagError::Io(format!("RegCreateKeyExW: {}", e)))?;
+        let val: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+        let name: Vec<u16> = "HighlanderForgeBlade".encode_utf16().chain(std::iter::once(0)).collect();
+        let val_bytes = unsafe { std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 2) };
+        let r = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(val_bytes));
+        if r != ERROR_SUCCESS { return Err(FlagError::Io(format!("RegSetValueExW: {:?}", r))); }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn win_reg_delete_run_once() -> Result<(), FlagError> {
+    use windows::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+    unsafe {
+        let sub: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce\\HighlanderForgeBlade"
+            .encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, windows::core::PCWSTR(sub.as_ptr()));
+    }
+    Ok(())
+}
+
 pub fn state_path(cfg: &Config) -> PathBuf {
     cfg.state_path()
 }

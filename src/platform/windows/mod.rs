@@ -1,5 +1,6 @@
 //! Implementacoes especificas do Windows
 
+pub mod cleanup;
 pub mod com;
 pub mod credential;
 pub mod registry;

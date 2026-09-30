@@ -286,6 +286,8 @@ impl AppState {
             AppMsg::UpdateAvailable(ref v) => { self.status_message = format!("Update {} disponivel", v); }
             AppMsg::UpdateNotAvailable => { self.status_message = "Nenhum update".to_string(); }
             AppMsg::UpdateFailed(ref err) => { self.status_message = format!("Falha no update: {}", err); }
+            AppMsg::SummaryDisplayed => { self.current_screen = Screen::Summary; }
+            AppMsg::UpdateCheckStarted => { self.status_message = "Verificando atualizacoes...".to_string(); }
             AppMsg::Shutdown => {}
         }
     }
