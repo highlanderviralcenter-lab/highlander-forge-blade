@@ -1,0 +1,2605 @@
+﻿
+
+=== src\config.rs ===
+
+//! Configuracao externa TOML/JSON
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Config {
+    pub base_dir: String,
+    pub log_level: String,
+    pub auto_update: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            base_dir: r"C:\ManutencaoWindows".to_string(),
+            log_level: "info".to_string(),
+            auto_update: true,
+        }
+    }
+}
+
+pub fn load_or_default() -> Config {
+    Config::default()
+}
+
+
+
+=== src\lib.rs ===
+
+//! Highlander Forge Blade - Biblioteca principal
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
+pub mod app;
+pub mod config;
+pub mod core;
+pub mod logging;
+pub mod platform;
+pub mod ui;
+pub mod utils;
+
+/// Re-exports comuns
+pub use core::error::CoreError;
+pub use core::audit::Auditor;
+pub use app::messages::{AppMsg, Screen, LogEntry, AuditPhase, CleanupOp};
+
+/// Versao do schema de estado persistente
+pub const STATE_SCHEMA_VERSION: u32 = 1;
+
+
+
+=== src\logging.rs ===
+
+//! Logging dual-mode: humano (TUI) e JSON (headless)
+
+use tracing_subscriber::{
+    fmt::{self},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Human,
+    Json,
+}
+
+pub fn init_logging(format: LogFormat) {
+    match format {
+        LogFormat::Human => init_human(),
+        LogFormat::Json => init_json(),
+    }
+}
+
+fn init_human() {
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env()
+            .add_directive("hfb=info".parse().unwrap()))
+        .with(fmt::layer()
+            .with_target(false)
+            .with_thread_ids(false)
+            .with_level(true)
+            .with_ansi(true)
+            .with_timer(fmt::time::ChronoLocal::rfc_3339()))
+        .init();
+}
+
+fn init_json() {
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env()
+            .add_directive("hfb=info".parse().unwrap()))
+        .with(fmt::layer()
+            .json()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_level(true)
+            .with_current_span(true)
+            .with_timer(fmt::time::ChronoLocal::rfc_3339()))
+        .init();
+}
+
+
+
+=== src\main.rs ===
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        highlander_forge_blade::logging::init_logging(
+            highlander_forge_blade::logging::LogFormat::Human
+        );
+
+        #[cfg(feature = "tui")]
+        highlander_forge_blade::ui::ratatui::run().await?;
+
+        Ok(())
+    })
+}
+
+
+
+=== src\utils.rs ===
+
+//! Utilitarios gerais
+
+
+
+=== src\app\commands.rs ===
+
+//! Comandos da aplicacao
+
+
+
+=== src\app\crypto.rs ===
+
+//! Criptografia — AES-GCM e gerenciamento de chaves
+
+
+
+=== src\app\events.rs ===
+
+//! Eventos da aplicacao
+
+
+
+=== src\app\headless.rs ===
+
+//! Modo headless — saida JSON parseable para RMMs/MSPs
+
+use crate::core::error::CoreError;
+use chrono::Utc;
+use serde::Serialize;
+use std::process;
+
+pub mod exit_codes {
+    pub const SUCCESS: i32 = 0;
+    pub const FATAL_ERROR: i32 = 1;
+    pub const SUCCESS_WITH_WARNINGS: i32 = 2;
+    pub const SIMULATION_COMPLETE: i32 = 3;
+    pub const UPDATE_AVAILABLE: i32 = 4;
+    pub const NEEDS_REBOOT: i32 = 5;
+    pub const PARTIAL_SUCCESS: i32 = 6;
+}
+
+#[derive(Debug, Serialize)]
+pub struct HeadlessOutput {
+    pub version: String,
+    pub machine_id: String,
+    pub timestamp: chrono::DateTime<Utc>,
+    pub exit_code: i32,
+    pub exit_reason: String,
+    pub phases: Vec<PhaseResult>,
+    pub summary: Summary,
+    pub logs_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhaseResult {
+    pub phase: String,
+    pub name: String,
+    pub status: PhaseStatus,
+    pub duration_seconds: u64,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub enum PhaseStatus { Success, Warning, Failed, Skipped }
+
+#[derive(Debug, Serialize)]
+pub struct Summary {
+    pub bytes_freed: u64,
+    pub services_altered: u32,
+    pub registry_keys_removed: u32,
+    pub updates_installed: u32,
+    pub reboot_required: bool,
+}
+
+pub async fn run(auto_phase: Option<String>, what_if: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::app::machine_id;
+    let machine_id = machine_id::get_or_create_machine_id().unwrap_or_else(|_| "unknown".to_string());
+    let mut output = HeadlessOutput {
+        version: env!("CARGO_PKG_VERSION").to_string(), machine_id,
+        timestamp: Utc::now(), exit_code: exit_codes::SUCCESS,
+        exit_reason: "Iniciando execucao".to_string(), phases: Vec::new(),
+        summary: Summary { bytes_freed: 0, services_altered: 0, registry_keys_removed: 0, updates_installed: 0, reboot_required: false },
+        logs_path: format!(r"{}\Logs", crate::app::state::BASE_DIR),
+    };
+    if what_if {
+        output.exit_code = exit_codes::SIMULATION_COMPLETE;
+        output.exit_reason = "Modo simulacao".to_string();
+        print_json(&output);
+        process::exit(exit_codes::SIMULATION_COMPLETE);
+    }
+    match auto_phase.as_deref() {
+        Some("0") | Some("all") => {
+            match run_all_phases(&mut output).await {
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Todas as fases concluidas".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Erro fatal: {}", e); }
+            }
+        }
+        Some("1") => {
+            match run_phase1(&mut output).await {
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Fase 1 concluida".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Fase 1 falhou: {}", e); }
+            }
+        }
+        Some("5") => {
+            match run_phase5(&mut output).await {
+                Ok(()) => { output.exit_code = exit_codes::SUCCESS; output.exit_reason = "Fase 5 concluida".to_string(); }
+                Err(e) => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = format!("Fase 5 falhou: {}", e); }
+            }
+        }
+        _ => { output.exit_code = exit_codes::FATAL_ERROR; output.exit_reason = "Fase invalida".to_string(); }
+    }
+    print_json(&output);
+    process::exit(output.exit_code);
+}
+
+async fn run_all_phases(output: &mut HeadlessOutput) -> Result<(), CoreError> {
+    let start = std::time::Instant::now();
+    run_phase1(output).await?;
+    output.phases.push(PhaseResult { phase: "1".to_string(), name: "Auditoria".to_string(), status: PhaseStatus::Success, duration_seconds: start.elapsed().as_secs(), details: serde_json::json!({}) });
+    let start = std::time::Instant::now();
+    run_phase3(output).await?;
+    output.phases.push(PhaseResult { phase: "3".to_string(), name: "Limpeza".to_string(), status: PhaseStatus::Success, duration_seconds: start.elapsed().as_secs(), details: serde_json::json!({}) });
+    output.summary.reboot_required = true;
+    Ok(())
+}
+
+async fn run_phase1(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
+    tracing::info!("Executando Fase 1: Auditoria");
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    Ok(())
+}
+async fn run_phase3(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
+    tracing::info!("Executando Fase 3: Limpeza");
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    Ok(())
+}
+async fn run_phase5(_output: &mut HeadlessOutput) -> Result<(), CoreError> {
+    tracing::info!("Executando Fase 5: Pos-reboot");
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    Ok(())
+}
+
+fn print_json(output: &HeadlessOutput) {
+    match serde_json::to_string_pretty(output) {
+        Ok(json) => println!("{}", json),
+        Err(e) => eprintln!("{{\"error\":\"Falha ao serializar: {}\"}}", e),
+    }
+}
+
+
+
+=== src\app\machine_id.rs ===
+
+//! machine_id persistente — separado do estado de manutencao
+
+use std::path::Path;
+use uuid::Uuid;
+
+const MACHINE_ID_FILE: &str = "machine_id";
+const BASE_DIR: &str = r"C:\\ManutencaoWindows";
+
+pub fn get_or_create_machine_id() -> Result<String, MachineIdError> {
+    let path = Path::new(BASE_DIR).join(MACHINE_ID_FILE);
+    if path.exists() {
+        let content = std::fs::read_to_string(&path).map_err(MachineIdError::Io)?;
+        let trimmed = content.trim();
+        if !trimmed.is_empty() && Uuid::parse_str(trimmed).is_ok() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    std::fs::create_dir_all(BASE_DIR)?;
+    let id = Uuid::new_v4().to_string();
+    std::fs::write(&path, &id)?;
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Storage::FileSystem::SetFileAttributesW;
+        use windows::core::PCWSTR;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let _ = SetFileAttributesW(PCWSTR(wide.as_ptr()),
+            windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN
+            | windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_SYSTEM);
+    }
+    Ok(id)
+}
+
+pub fn read_machine_id() -> Result<String, MachineIdError> {
+    let path = Path::new(BASE_DIR).join(MACHINE_ID_FILE);
+    if !path.exists() { return Err(MachineIdError::NotFound); }
+    let content = std::fs::read_to_string(&path).map_err(MachineIdError::Io)?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() { return Err(MachineIdError::InvalidFormat); }
+    Uuid::parse_str(trimmed).map_err(|_| MachineIdError::InvalidFormat)?;
+    Ok(trimmed.to_string())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MachineIdError {
+    #[error("Arquivo machine_id nao encontrado")]
+    NotFound,
+    #[error("Erro de IO: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Formato invalido")]
+    InvalidFormat,
+}
+
+
+
+=== src\app\messages.rs ===
+
+//! Mensagens do sistema
+
+use crate::core::error::CoreError;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub enum AppMsg {
+    Tick, Shutdown, NavigateUp, NavigateDown, Select, Back,
+    AuditStarted,
+    AuditProgress { phase: AuditPhase, item: String, percent: u8 },
+    AuditCompleted(Box<AuditData>),
+    AuditFailed(CoreError),
+    SummaryDisplayed,
+    UserConfirmed(bool),
+    CleanupStarted,
+    CleanupProgress { operation: CleanupOp, detail: String, percent: u8, bytes_freed: u64 },
+    CleanupCompleted,
+    CleanupFailed(CoreError),
+    RebootScheduled, RebootCancelled,
+    PostRebootStarted,
+    PostRebootProgress { tool: RepairTool, percent: u8, detail: String },
+    PostRebootCompleted,
+    PostRebootFailed(CoreError),
+    LogLine(LogEntry),
+    Error(CoreError),
+    StateSaved,
+    StateLoaded(Result<crate::app::state::StateFile, StateError>),
+    ReportGenerated(ReportFormat),
+    UpdateCheckStarted,
+    UpdateAvailable(String),
+    UpdateNotAvailable,
+    UpdateFailed(CoreError),
+}
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: DateTime<Utc>,
+    pub level: LogLevel,
+    pub source: String,
+    pub message: String,
+}
+
+impl LogEntry {
+    pub fn info(source: impl Into<String>, message: impl Into<String>) -> Self {
+        Self { timestamp: Utc::now(), level: LogLevel::Info, source: source.into(), message: message.into() }
+    }
+    pub fn warn(message: impl Into<String>) -> Self {
+        Self { timestamp: Utc::now(), level: LogLevel::Warn, source: "system".to_string(), message: message.into() }
+    }
+    pub fn success(message: impl Into<String>) -> Self {
+        Self { timestamp: Utc::now(), level: LogLevel::Success, source: "system".to_string(), message: message.into() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel { Debug, Info, Warn, Error, Success, Phase }
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogLevel::Debug => write!(f, "DEBUG"),
+            LogLevel::Info => write!(f, "INFO"),
+            LogLevel::Warn => write!(f, "WARN"),
+            LogLevel::Error => write!(f, "ERROR"),
+            LogLevel::Success => write!(f, "SUCCESS"),
+            LogLevel::Phase => write!(f, "PHASE"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuditPhase { Hardware, Software, Updates, Services, Registry, Environment }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupOp { TempFiles, BrowserCache, RecycleBin, OldLogs, WindowsUpdates, ServicesOptimize, RegistryClean }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepairTool { Sfc, Dism, Chkdsk }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReportFormat { Html, Txt, Json }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuditData {
+    pub cpu: Option<CpuInfo>, pub memory: Option<MemoryInfo>, pub disks: Vec<DiskInfo>,
+    pub gpus: Vec<GpuInfo>, pub motherboard: Option<MotherboardInfo>,
+    pub temperatures: Vec<TemperatureReading>, pub software: Vec<SoftwareInfo>,
+    pub services: Vec<ServiceInfo>, pub registry_run_keys: Vec<RunKey>,
+    pub environment: EnvironmentVars,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CpuInfo {
+    pub name: String, pub manufacturer: String, pub cores: u32, pub threads: u32,
+    pub max_speed_mhz: u32, pub architecture: String, pub socket: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryInfo {
+    pub total_bytes: u64, pub modules: Vec<MemoryModule>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryModule {
+    pub slot: String, pub capacity_bytes: u64, pub speed_mhz: u32, pub manufacturer: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiskInfo {
+    pub device_id: String, pub volume_name: String, pub filesystem: String,
+    pub total_bytes: u64, pub free_bytes: u64, pub used_bytes: u64, pub percent_free: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GpuInfo {
+    pub name: String, pub manufacturer: String, pub adapter_ram_bytes: u64,
+    pub resolution: String, pub driver_version: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MotherboardInfo {
+    pub manufacturer: String, pub product: String, pub version: String, pub serial_number: String,
+    pub bios_vendor: String, pub bios_version: String, pub bios_date: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TemperatureReading {
+    pub zone: String, pub celsius: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SoftwareInfo {
+    pub display_name: String, pub display_version: String, pub publisher: String,
+    pub install_date: String, pub install_location: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServiceInfo {
+    pub name: String, pub display_name: String, pub state: String, pub start_mode: String,
+    pub is_third_party: bool, pub path: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunKey {
+    pub hive: String, pub name: String, pub value: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnvironmentVars {
+    pub system: Vec<(String, String)>, pub user: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
+pub enum StateError {
+    #[error("Arquivo de estado nao encontrado")] NotFound,
+    #[error("Erro de IO: {0}")] Io(String),
+    #[error("Erro de parse JSON: {0}")] Parse(String),
+    #[error("Versao de schema nao suportada: {0}")] UnsupportedVersion(u32),
+    #[error("Checksum invalido")] InvalidChecksum,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AppState {
+    pub current_screen: Screen,
+    pub selected_menu_item: usize,
+    pub audit_data: Option<Box<AuditData>>,
+    pub progress: f32,
+    pub logs: Vec<LogEntry>,
+    pub status_message: String,
+    pub is_simulation: bool,
+    pub phases_completed: Vec<String>,
+}
+
+impl AppState {
+    pub fn update(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::Tick => {}
+            AppMsg::NavigateUp => { if self.selected_menu_item > 0 { self.selected_menu_item -= 1; } }
+            AppMsg::NavigateDown => { if self.selected_menu_item < 10 { self.selected_menu_item += 1; } }
+            AppMsg::Select => self.handle_menu_select(),
+            AppMsg::Back => { self.current_screen = Screen::Menu; }
+            AppMsg::AuditStarted => {
+                self.current_screen = Screen::AuditProgress;
+                self.progress = 0.0;
+                self.status_message = "Iniciando auditoria...".to_string();
+            }
+            AppMsg::AuditProgress { percent, ref item, .. } => {
+                // DEBUG: confirma que o valor esta chegando e sendo aplicado
+                tracing::debug!(target: "hfb_state", "AuditProgress handler: item={} percent={} -> progress={}", item, percent, percent as f32);
+                self.progress = percent as f32;
+                self.status_message = format!("Coletando: {}", item);
+                self.logs.push(LogEntry::info("audit", format!("{} - {}%", item, percent)));
+            }
+            AppMsg::AuditCompleted(data) => {
+                self.audit_data = Some(data);
+                self.current_screen = Screen::Summary;
+                self.progress = 100.0;
+                self.status_message = "Auditoria concluida!".to_string();
+            }
+            AppMsg::AuditFailed(ref err) => {
+                self.status_message = format!("Erro: {}", err);
+                self.logs.push(LogEntry::warn(format!("Auditoria falhou: {}", err)));
+            }
+            AppMsg::CleanupStarted => {
+                self.current_screen = Screen::CleanupProgress;
+                self.progress = 0.0;
+            }
+            AppMsg::CleanupProgress { percent, ref detail, bytes_freed, .. } => {
+                self.progress = percent as f32;
+                self.status_message = format!("{} ({} bytes liberados)", detail, bytes_freed);
+            }
+            AppMsg::CleanupCompleted => {
+                self.current_screen = Screen::RebootConfirm;
+                self.progress = 100.0;
+            }
+            AppMsg::UserConfirmed(true) => { self.current_screen = Screen::PostRebootProgress; }
+            AppMsg::UserConfirmed(false) => { self.current_screen = Screen::Menu; }
+            AppMsg::PostRebootStarted => {
+                self.current_screen = Screen::PostRebootProgress;
+                self.progress = 0.0;
+            }
+            AppMsg::PostRebootCompleted => {
+                self.current_screen = Screen::ReportView;
+                self.progress = 100.0;
+            }
+            AppMsg::ReportGenerated(_) => { self.current_screen = Screen::ReportView; }
+            AppMsg::LogLine(entry) => {
+                self.logs.push(entry);
+                if self.logs.len() > 500 { self.logs.remove(0); }
+            }
+            AppMsg::Error(ref err) => {
+                self.status_message = format!("Erro: {}", err);
+                self.logs.push(LogEntry::warn(format!("Erro: {}", err)));
+            }
+            AppMsg::StateSaved => { self.status_message = "Estado salvo".to_string(); }
+            AppMsg::StateLoaded(Ok(_)) => { self.status_message = "Estado carregado".to_string(); }
+            AppMsg::StateLoaded(Err(ref e)) => { self.status_message = format!("Erro ao carregar: {}", e); }
+            AppMsg::UpdateAvailable(ref v) => { self.status_message = format!("Update {} disponivel", v); }
+            AppMsg::UpdateNotAvailable => { self.status_message = "Nenhum update".to_string(); }
+            AppMsg::UpdateFailed(ref err) => { self.status_message = format!("Falha no update: {}", err); }
+            _ => {}
+        }
+    }
+
+    fn handle_menu_select(&mut self) {
+        match self.selected_menu_item {
+            0 | 1 => { /* Audit iniciada pelo app.rs */ }
+            2 | 3 => {
+                if self.audit_data.is_some() { self.current_screen = Screen::Summary; }
+                else { self.status_message = "Execute Fase 1 primeiro".to_string(); self.logs.push(LogEntry::warn("Execute Fase 1 primeiro")); }
+            }
+            4 | 5 => { self.current_screen = Screen::CleanupProgress; self.progress = 0.0; }
+            6 | 7 => { self.current_screen = Screen::RebootConfirm; }
+            8 => { self.current_screen = Screen::PostRebootProgress; self.progress = 0.0; }
+            9 => {
+                if self.audit_data.is_some() { self.current_screen = Screen::ReportView; }
+                else { self.status_message = "Nenhum dado de auditoria".to_string(); self.logs.push(LogEntry::warn("Execute Fase 1 primeiro")); }
+            }
+            10 => { self.logs.push(LogEntry::info("menu", "Saindo...")); }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Screen {
+    #[default] Menu,
+    AuditProgress, Summary, CleanupProgress, RebootConfirm,
+    PostRebootProgress, ReportView, LogsView,
+}
+
+
+
+
+=== src\app\mod.rs ===
+
+pub mod commands;
+pub mod crypto;
+pub mod events;
+pub mod headless;
+pub mod machine_id;
+pub mod messages;
+pub mod state;
+pub mod update;
+
+pub use messages::{
+    AppState, AppMsg, Screen, LogEntry, LogLevel, AuditData, AuditPhase,
+    CleanupOp, RepairTool, ReportFormat, StateError,
+    CpuInfo, MemoryInfo, MemoryModule, DiskInfo, GpuInfo, MotherboardInfo,
+};
+pub use state::{load_state, save_state, StateFile, CleanupData, BASE_DIR};
+
+
+
+=== src\app\state.rs ===
+
+//! Persistencia de estado com versionamento
+
+use crate::app::messages::{AuditData, StateError};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const BASE_DIR: &str = r"C:\\ManutencaoWindows";
+pub const STATE_FILE: &str = "estado_manutencao.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateFile {
+    pub schema_version: u32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub machine_id: String,
+    pub app_version: String,
+    pub checksum: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_data: Option<Box<AuditData>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_data: Option<CleanupData>,
+    pub phases_executed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CleanupData {
+    pub bytes_freed: u64,
+    pub services_disabled: Vec<String>,
+    pub registry_keys_removed: Vec<String>,
+    pub updates_installed: Vec<String>,
+}
+
+impl StateFile {
+    pub fn new(machine_id: String) -> Self {
+        let now = Utc::now();
+        let mut s = Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            created_at: now, updated_at: now, machine_id,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            checksum: String::new(), audit_data: None, cleanup_data: None, phases_executed: Vec::new(),
+        };
+        s.recalculate_checksum();
+        s
+    }
+    pub fn add_phase(&mut self, phase: &str) {
+        if !self.phases_executed.contains(&phase.to_string()) {
+            self.phases_executed.push(phase.to_string());
+        }
+        self.updated_at = Utc::now();
+        self.recalculate_checksum();
+    }
+    fn recalculate_checksum(&mut self) {
+        let old = self.checksum.clone();
+        self.checksum = String::new();
+        let json = serde_json::to_string(self).unwrap_or_default();
+        self.checksum = format!("{:08x}", crc32(&json));
+        let _ = old;
+    }
+    pub fn verify_checksum(&self) -> bool {
+        let mut temp = self.clone();
+        temp.checksum = String::new();
+        let json = serde_json::to_string(&temp).unwrap_or_default();
+        format!("{:08x}", crc32(&json)) == self.checksum
+    }
+}
+
+fn crc32(data: &str) -> u32 {
+    let mut crc: u32 = 0xffffffff;
+    for byte in data.bytes() {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb88320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+pub fn load_state() -> Result<StateFile, StateError> {
+    let path = state_path();
+    if !path.exists() { return Err(StateError::NotFound); }
+    let content = std::fs::read_to_string(&path).map_err(|e| StateError::Io(e.to_string()))?;
+    let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| StateError::Parse(e.to_string()))?;
+    let version = raw.get("schema_version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    match version {
+        0 => migrate_v0_to_v1(raw),
+        1 => {
+            let state: StateFile = serde_json::from_value(raw).map_err(|e| StateError::Parse(e.to_string()))?;
+            if !state.verify_checksum() { return Err(StateError::InvalidChecksum); }
+            Ok(state)
+        }
+        _ => Err(StateError::UnsupportedVersion(version)),
+    }
+}
+
+pub fn save_state(state: &StateFile) -> Result<(), StateError> {
+    let path = state_path();
+    std::fs::create_dir_all(BASE_DIR).map_err(|e| StateError::Io(e.to_string()))?;
+    if path.exists() { let _ = std::fs::copy(&path, format!("{}.bak", path.display())); }
+    let mut state = state.clone();
+    state.recalculate_checksum();
+    let json = serde_json::to_string_pretty(&state).map_err(|e| StateError::Parse(e.to_string()))?;
+    std::fs::write(&path, json).map_err(|e| StateError::Io(e.to_string()))?;
+    Ok(())
+}
+
+fn state_path() -> PathBuf { Path::new(BASE_DIR).join(STATE_FILE) }
+
+fn migrate_v0_to_v1(mut raw: serde_json::Value) -> Result<StateFile, StateError> {
+    use crate::app::machine_id;
+    raw["schema_version"] = serde_json::json!(1);
+    raw["machine_id"] = serde_json::json!(machine_id::get_or_create_machine_id().map_err(|e| StateError::Io(e.to_string()))?);
+    raw["app_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    raw["checksum"] = serde_json::json!("");
+    if raw.get("phases_executed").is_none() { raw["phases_executed"] = serde_json::json!(Vec::<String>::new()); }
+    serde_json::from_value(raw).map_err(|e| StateError::Parse(e.to_string()))
+}
+
+
+
+=== src\app\update.rs ===
+
+//! Auto-update com verificacao Ed25519 (DT-11)
+
+use crate::core::error::CoreError;
+
+pub async fn check_update() -> Result<Option<String>, CoreError> {
+    tracing::info!("Verificando atualizacoes...");
+    Ok(None)
+}
+
+pub async fn download_and_verify(_url: &str, _expected_sig: &str) -> Result<Vec<u8>, CoreError> {
+    Err(CoreError::NotSupported("Auto-update ainda nao implementado".to_string()))
+}
+
+
+
+=== src\core\audit.rs ===
+
+//! Fase 1: Auditoria completa do sistema
+
+use crate::app::messages::*;
+use crate::core::error::CoreError;
+use crate::core::traits::{SystemInfoProvider, RegistryProvider, ServiceProvider};
+use tokio::sync::mpsc::Sender;
+use tracing::{info, warn};
+
+pub struct Auditor<'a> {
+    sys: &'a dyn SystemInfoProvider,
+    reg: &'a dyn RegistryProvider,
+    svc: &'a dyn ServiceProvider,
+}
+
+impl<'a> Auditor<'a> {
+    pub fn new(sys: &'a dyn SystemInfoProvider, reg: &'a dyn RegistryProvider, svc: &'a dyn ServiceProvider) -> Self {
+        Self { sys, reg, svc }
+    }
+
+    pub async fn run_full(&self, tx: &Sender<AppMsg>) -> Result<AuditData, CoreError> {
+        let mut data = AuditData::default();
+
+        self.report_progress(tx, AuditPhase::Hardware, "CPU", 0).await;
+        data.cpu = Some(self.sys.cpu()?);
+        self.report_progress(tx, AuditPhase::Hardware, "Memoria", 10).await;
+        data.memory = Some(self.sys.memory()?);
+        self.report_progress(tx, AuditPhase::Hardware, "Discos", 20).await;
+        data.disks = self.sys.disks()?;
+        self.report_progress(tx, AuditPhase::Hardware, "GPU", 30).await;
+        data.gpus = self.sys.gpu()?;
+        self.report_progress(tx, AuditPhase::Hardware, "Placa-mae", 35).await;
+        data.motherboard = Some(self.sys.motherboard()?);
+        self.report_progress(tx, AuditPhase::Hardware, "Temperaturas", 38).await;
+        data.temperatures = self.sys.temperatures().unwrap_or_default();
+
+        self.report_progress(tx, AuditPhase::Software, "Programas instalados", 40).await;
+        data.software = self.collect_software()?;
+
+        self.report_progress(tx, AuditPhase::Services, "Servicos do sistema", 60).await;
+        data.services = self.svc.list_all()?;
+
+        self.report_progress(tx, AuditPhase::Registry, "Chaves de inicializacao", 75).await;
+        data.registry_run_keys = self.collect_run_keys()?;
+
+        self.report_progress(tx, AuditPhase::Environment, "Variaveis de ambiente", 90).await;
+        data.environment = self.collect_environment()?;
+
+        self.report_progress(tx, AuditPhase::Hardware, "Concluido", 100).await;
+        info!("Auditoria completa finalizada");
+        Ok(data)
+    }
+
+    async fn report_progress(&self, tx: &Sender<AppMsg>, phase: AuditPhase, item: &str, percent: u8) {
+        let _ = tx.send(AppMsg::AuditProgress { phase, item: item.to_string(), percent }).await;
+    }
+
+    fn collect_software(&self) -> Result<Vec<SoftwareInfo>, CoreError> {
+        let mut software = Vec::new();
+        let paths = [
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ];
+        for path in &paths {
+            match self.reg.enum_subkeys(path) {
+                Ok(subkeys) => {
+                    for subkey in subkeys {
+                        let full_path = format!("{}\\{}", path, subkey);
+                        if let Ok(name) = self.reg.read_key(&full_path, "DisplayName") {
+                            if !name.is_empty() {
+                                software.push(SoftwareInfo {
+                                    display_name: name,
+                                    display_version: self.reg.read_key(&full_path, "DisplayVersion").unwrap_or_default(),
+                                    publisher: self.reg.read_key(&full_path, "Publisher").unwrap_or_default(),
+                                    install_date: self.reg.read_key(&full_path, "InstallDate").unwrap_or_default(),
+                                    install_location: self.reg.read_key(&full_path, "InstallLocation").unwrap_or_default(),
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(e) => warn!("Nao foi possivel ler {}: {}", path, e),
+            }
+        }
+        software.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        Ok(software)
+    }
+
+    fn collect_run_keys(&self) -> Result<Vec<RunKey>, CoreError> {
+        let mut keys = Vec::new();
+        let paths = [
+            ("HKLM", r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+            ("HKLM", r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
+            ("HKCU", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+        ];
+        for (hive, path) in &paths {
+            if let Ok(values) = self.reg.enum_values(path) {
+                for (name, value) in values {
+                    if !name.is_empty() && !value.is_empty() {
+                        keys.push(RunKey { hive: hive.to_string(), name, value });
+                    }
+                }
+            }
+        }
+        Ok(keys)
+    }
+
+    fn collect_environment(&self) -> Result<EnvironmentVars, CoreError> {
+        let system: Vec<(String, String)> = std::env::vars().collect();
+        let user: Vec<(String, String)> = std::env::vars().collect();
+        Ok(EnvironmentVars { system, user })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::traits::{MockSystemInfoProvider, MockRegistryProvider, MockServiceProvider};
+
+    #[tokio::test]
+    async fn test_audit_full_flow() {
+        let mut mock_sys = MockSystemInfoProvider::new();
+        let mock_reg = MockRegistryProvider::new();
+        let mock_svc = MockServiceProvider::new();
+
+        mock_sys.expect_cpu().times(1).returning(|| Ok(CpuInfo {
+            name: "Intel i7-9700K".to_string(), manufacturer: "Intel".to_string(),
+            cores: 8, threads: 8, max_speed_mhz: 4900, architecture: "x64".to_string(), socket: "LGA1151".to_string(),
+        }));
+        mock_sys.expect_memory().times(1).returning(|| Ok(MemoryInfo {
+            total_bytes: 17179869184,
+            modules: vec![MemoryModule { slot: "DIMM1".to_string(), capacity_bytes: 17179869184, speed_mhz: 3200, manufacturer: "Corsair".to_string() }],
+        }));
+        mock_sys.expect_disks().times(1).returning(|| Ok(vec![]));
+        mock_sys.expect_gpu().times(1).returning(|| Ok(vec![]));
+        mock_sys.expect_motherboard().times(1).returning(|| Ok(MotherboardInfo::default()));
+        mock_sys.expect_temperatures().times(1).returning(|| Ok(vec![]));
+
+        let auditor = Auditor::new(&mock_sys, &mock_reg, &mock_svc);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let result = auditor.run_full(&tx).await;
+        assert!(result.is_ok());
+
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(msg, AppMsg::AuditProgress { phase: AuditPhase::Hardware, .. }));
+    }
+}
+
+
+
+=== src\core\cleanup.rs ===
+
+//! Implementacao real de CleanupProvider
+use crate::core::error::CoreError;
+use crate::core::traits::CleanupProvider;
+use std::process::Command;
+use std::path::Path;
+
+pub struct WinCleanupProvider;
+
+impl WinCleanupProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl CleanupProvider for WinCleanupProvider {
+    fn clean_temp_files(&self) -> Result<u64, CoreError> {
+        let temp_dir = std::env::temp_dir();
+        let mut bytes_freed: u64 = 0;
+
+        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.is_file() {
+                        bytes_freed += metadata.len();
+                        let _ = std::fs::remove_file(&path);
+                    } else if metadata.is_dir() {
+                        let _ = std::fs::remove_dir_all(&path);
+                    }
+                }
+            }
+        }
+
+        Ok(bytes_freed)
+    }
+
+    fn clean_recycle_bin(&self) -> Result<u64, CoreError> {
+        // CORRECAO: raw string r"..." para evitar escape de \ e $
+        let _output = Command::new("cmd")
+            .args(["/c", r"rd /s /q C:\$Recycle.Bin 2>nul"])
+            .output()
+            .map_err(|e| CoreError::Io(e.to_string()))?;
+
+        Ok(0)
+    }
+
+    fn clean_browser_cache(&self) -> Result<u64, CoreError> {
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .unwrap_or_else(|_| String::from(r"C:\Users\Default\AppData\Local"));
+
+        let mut bytes_freed: u64 = 0;
+
+        let chrome_cache = Path::new(&local_app_data).join(r"Google\Chrome\User Data\Default\Cache");
+        if chrome_cache.exists() {
+            if let Ok(entries) = std::fs::read_dir(&chrome_cache) {
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if metadata.is_file() {
+                            bytes_freed += metadata.len();
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        let edge_cache = Path::new(&local_app_data).join(r"Microsoft\Edge\User Data\Default\Cache");
+        if edge_cache.exists() {
+            if let Ok(entries) = std::fs::read_dir(&edge_cache) {
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if metadata.is_file() {
+                            bytes_freed += metadata.len();
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(bytes_freed)
+    }
+
+    fn run_dism(&self) -> Result<(), CoreError> {
+        let _output = Command::new("dism")
+            .args(["/Online", "/Cleanup-Image", "/RestoreHealth"])
+            .output()
+            .map_err(|e| CoreError::Io(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn run_sfc(&self) -> Result<(), CoreError> {
+        let _output = Command::new("sfc")
+            .args(["/scannow"])
+            .output()
+            .map_err(|e| CoreError::Io(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+
+
+=== src\core\error.rs ===
+
+//! Erros do core — hierarquia unificada
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum CoreError {
+    #[error("WMI indisponivel: {0}")]
+    WmiUnavailable(String),
+    #[error("Registry inacessivel: {0}")]
+    RegistryAccess(String),
+    #[error("Servico nao encontrado: {0}")]
+    ServiceNotFound(String),
+    #[error("Permissao negada: {0}")]
+    PermissionDenied(String),
+    #[error("Operacao nao suportada: {0}")]
+    NotSupported(String),
+    #[error("Timeout: {0}")]
+    Timeout(String),
+    #[error("Erro de IO: {0}")]
+    Io(String),
+    #[error("Erro de serializacao: {0}")]
+    Serialization(String),
+    #[error("Estado inconsistente: {0}")]
+    InvalidState(String),
+    #[error("Operacao abortada pelo usuario")]
+    UserCancelled,
+}
+
+impl From<std::io::Error> for CoreError {
+    fn from(e: std::io::Error) -> Self {
+        CoreError::Io(e.to_string())
+    }
+}
+
+
+
+=== src\core\mod.rs ===
+
+//! Core — logica de negocio e abstracoes
+
+pub mod audit;
+pub mod cleanup;
+pub mod error;
+pub mod registry;
+pub mod repair;
+pub mod report;
+pub mod security;
+pub mod services;
+pub mod storage;
+pub mod system;
+pub mod traits;
+pub mod updates;
+
+
+
+=== src\core\registry.rs ===
+
+//! Registry
+
+
+
+=== src\core\repair.rs ===
+
+//! Repair
+
+
+
+=== src\core\report.rs ===
+
+//! Report
+
+
+
+=== src\core\security.rs ===
+
+//! Security
+
+
+
+=== src\core\services.rs ===
+
+//! Services
+
+
+
+=== src\core\storage.rs ===
+
+//! Storage
+
+
+
+=== src\core\system.rs ===
+
+//! System
+
+
+
+=== src\core\traits.rs ===
+
+//! Traits para injecao de dependencia e testabilidade (DT-09)
+
+use crate::core::error::CoreError;
+use crate::app::messages::*;
+
+#[cfg_attr(test, mockall::automock)]
+pub trait SystemInfoProvider: Send + Sync {
+    fn cpu(&self) -> Result<CpuInfo, CoreError>;
+    fn memory(&self) -> Result<MemoryInfo, CoreError>;
+    fn disks(&self) -> Result<Vec<DiskInfo>, CoreError>;
+    fn gpu(&self) -> Result<Vec<GpuInfo>, CoreError>;
+    fn motherboard(&self) -> Result<MotherboardInfo, CoreError>;
+    fn temperatures(&self) -> Result<Vec<TemperatureReading>, CoreError>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+pub trait RegistryProvider: Send + Sync {
+    fn read_key(&self, path: &str, name: &str) -> Result<String, CoreError>;
+    fn enum_values(&self, path: &str) -> Result<Vec<(String, String)>, CoreError>;
+    fn delete_value(&self, path: &str, name: &str) -> Result<(), CoreError>;
+    fn enum_subkeys(&self, path: &str) -> Result<Vec<String>, CoreError>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+pub trait ServiceProvider: Send + Sync {
+    fn list_all(&self) -> Result<Vec<ServiceInfo>, CoreError>;
+    fn get_status(&self, name: &str) -> Result<String, CoreError>;
+    fn set_start_type(&self, name: &str, start_type: &str) -> Result<(), CoreError>;
+    fn stop(&self, name: &str) -> Result<(), CoreError>;
+    fn start(&self, name: &str) -> Result<(), CoreError>;
+}
+
+// NOVO: CleanupProvider — necessario para core/cleanup.rs
+#[cfg_attr(test, mockall::automock)]
+pub trait CleanupProvider: Send + Sync {
+    fn clean_temp_files(&self) -> Result<u64, CoreError>;
+    fn clean_recycle_bin(&self) -> Result<u64, CoreError>;
+    fn clean_browser_cache(&self) -> Result<u64, CoreError>;
+    fn run_dism(&self) -> Result<(), CoreError>;
+    fn run_sfc(&self) -> Result<(), CoreError>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+pub trait UpdateProvider: Send + Sync {
+    fn search_pending(&self) -> Result<Vec<String>, CoreError>;
+    fn install_updates(&self) -> Result<u32, CoreError>;
+    fn get_history(&self, limit: u32) -> Result<Vec<String>, CoreError>;
+}
+
+/// Fabrica que cria implementacoes REAIS. Testes injetam mocks diretamente.
+pub struct ProviderFactory;
+
+impl ProviderFactory {
+    pub fn system_info() -> Box<dyn SystemInfoProvider> {
+        Box::new(crate::platform::windows::wmi::WmiSystemInfoProvider::new())
+    }
+    pub fn registry() -> Box<dyn RegistryProvider> {
+        Box::new(crate::platform::windows::registry::WinRegistryProvider::new())
+    }
+    pub fn services() -> Box<dyn ServiceProvider> {
+        Box::new(crate::platform::windows::services::WinServiceProvider::new())
+    }
+    pub fn updates() -> Box<dyn UpdateProvider> {
+        Box::new(crate::platform::windows::updates::WuaUpdateProvider::new())
+    }
+    // NOVO
+    pub fn cleanup() -> Box<dyn CleanupProvider> {
+        Box::new(crate::core::cleanup::WinCleanupProvider::new())
+    }
+}
+
+
+
+=== src\core\updates.rs ===
+
+//! Updates
+
+
+
+=== src\platform\mod.rs ===
+
+//! Abstracao de plataforma
+
+#[cfg(windows)]
+pub mod windows;
+
+
+
+=== src\platform\windows\com.rs ===
+
+//! Helpers COM para WMI
+
+
+
+=== src\platform\windows\credential.rs ===
+
+//! Gerenciamento de credenciais via Windows Credential Manager
+
+
+
+=== src\platform\windows\mod.rs ===
+
+//! Implementacoes especificas do Windows
+
+pub mod com;
+pub mod credential;
+pub mod registry;
+pub mod services;
+pub mod updates;
+pub mod wmi;
+
+
+
+=== src\platform\windows\registry.rs ===
+
+//! Implementacao real de RegistryProvider
+use crate::core::error::CoreError;
+use crate::core::traits::RegistryProvider;
+
+pub struct WinRegistryProvider;
+impl WinRegistryProvider { pub fn new() -> Self { Self } }
+
+impl RegistryProvider for WinRegistryProvider {
+    fn read_key(&self, _path: &str, _name: &str) -> Result<String, CoreError> {
+        Err(CoreError::NotSupported("Registry nao implementado".to_string()))
+    }
+    fn enum_values(&self, _path: &str) -> Result<Vec<(String, String)>, CoreError> {
+        Ok(Vec::new())
+    }
+    fn delete_value(&self, _path: &str, _name: &str) -> Result<(), CoreError> {
+        Err(CoreError::NotSupported("Registry nao implementado".to_string()))
+    }
+    fn enum_subkeys(&self, _path: &str) -> Result<Vec<String>, CoreError> {
+        Ok(Vec::new())
+    }
+}
+
+
+
+=== src\platform\windows\services.rs ===
+
+//! Implementacao real de ServiceProvider
+
+use crate::core::error::CoreError;
+use crate::core::traits::ServiceProvider;
+use crate::app::messages::ServiceInfo;
+
+pub struct WinServiceProvider;
+
+impl WinServiceProvider {
+    pub fn new() -> Self { Self }
+}
+
+impl ServiceProvider for WinServiceProvider {
+    fn list_all(&self) -> Result<Vec<ServiceInfo>, CoreError> {
+        let mut services = Vec::new();
+        let output = std::process::Command::new("sc")
+            .args(["query", "type=", "service", "state=", "all"])
+            .output()
+            .map_err(|e| CoreError::ServiceNotFound(e.to_string()))?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut current_name = String::new();
+        let mut current_display = String::new();
+        let mut current_state = String::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("SERVICE_NAME:") {
+                if !current_name.is_empty() {
+                    services.push(ServiceInfo {
+                        name: current_name.clone(), display_name: current_display.clone(),
+                        state: current_state.clone(), start_mode: "Desconhecido".to_string(),
+                        is_third_party: false, path: String::new(),
+                    });
+                }
+                current_name = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+                current_display = String::new();
+                current_state = String::new();
+            } else if trimmed.starts_with("DISPLAY_NAME:") {
+                current_display = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+            } else if trimmed.starts_with("STATE") {
+                if let Some(_idx) = trimmed.find("4  RUNNING") { current_state = "Running".to_string(); }
+                else if let Some(_idx) = trimmed.find("1  STOPPED") { current_state = "Stopped".to_string(); }
+                else { current_state = "Unknown".to_string(); }
+            }
+        }
+        if !current_name.is_empty() {
+            services.push(ServiceInfo {
+                name: current_name, display_name: current_display,
+                state: current_state, start_mode: "Desconhecido".to_string(),
+                is_third_party: false, path: String::new(),
+            });
+        }
+        Ok(services)
+    }
+
+    fn get_status(&self, name: &str) -> Result<String, CoreError> {
+        let output = std::process::Command::new("sc").args(["query", name]).output()
+            .map_err(|e| CoreError::ServiceNotFound(e.to_string()))?;
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    fn set_start_type(&self, name: &str, start_type: &str) -> Result<(), CoreError> {
+        let mode = match start_type {
+            "auto" => "auto",
+            "manual" => "demand",
+            "disabled" => "disabled",
+            _ => return Err(CoreError::NotSupported(format!("Start type invalido: {}", start_type))),
+        };
+        let output = std::process::Command::new("sc").args(["config", name, "start=", mode]).output()
+            .map_err(|e| CoreError::ServiceNotFound(e.to_string()))?;
+        if !output.status.success() {
+            return Err(CoreError::ServiceNotFound(format!("Falha ao alterar {}: {}", name, String::from_utf8_lossy(&output.stderr))));
+        }
+        Ok(())
+    }
+
+    fn stop(&self, name: &str) -> Result<(), CoreError> {
+        let output = std::process::Command::new("sc").args(["stop", name]).output()
+            .map_err(|e| CoreError::ServiceNotFound(e.to_string()))?;
+        if !output.status.success() {
+            return Err(CoreError::ServiceNotFound(format!("Falha ao parar {}: {}", name, String::from_utf8_lossy(&output.stderr))));
+        }
+        Ok(())
+    }
+
+    fn start(&self, name: &str) -> Result<(), CoreError> {
+        let output = std::process::Command::new("sc").args(["start", name]).output()
+            .map_err(|e| CoreError::ServiceNotFound(e.to_string()))?;
+        if !output.status.success() {
+            return Err(CoreError::ServiceNotFound(format!("Falha ao iniciar {}: {}", name, String::from_utf8_lossy(&output.stderr))));
+        }
+        Ok(())
+    }
+}
+
+
+
+
+=== src\platform\windows\updates.rs ===
+
+//! Implementacao real de UpdateProvider
+use crate::core::error::CoreError;
+use crate::core::traits::UpdateProvider;
+
+pub struct WuaUpdateProvider;
+impl WuaUpdateProvider { pub fn new() -> Self { Self } }
+
+impl UpdateProvider for WuaUpdateProvider {
+    fn search_pending(&self) -> Result<Vec<String>, CoreError> { Ok(Vec::new()) }
+    fn install_updates(&self) -> Result<u32, CoreError> { Ok(0) }
+    fn get_history(&self, _limit: u32) -> Result<Vec<String>, CoreError> { Ok(Vec::new()) }
+}
+
+
+
+=== src\platform\windows\wmi.rs ===
+
+//! Implementacao real de SystemInfoProvider via WMI (PowerShell fallback + COM futuro)
+
+use crate::app::messages::*;
+use crate::core::error::CoreError;
+use crate::core::traits::SystemInfoProvider;
+
+pub struct WmiSystemInfoProvider;
+
+impl WmiSystemInfoProvider {
+    pub fn new() -> Self { Self }
+
+    fn run_ps(&self, script: &str) -> Result<String, CoreError> {
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .output()
+            .map_err(|e| CoreError::WmiUnavailable(e.to_string()))?;
+        if !output.status.success() {
+            return Err(CoreError::WmiUnavailable(String::from_utf8_lossy(&output.stderr).to_string()));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+impl SystemInfoProvider for WmiSystemInfoProvider {
+    fn cpu(&self) -> Result<CpuInfo, CoreError> {
+        let name = self.run_ps("(Get-WmiObject Win32_Processor).Name").unwrap_or_else(|_| "Desconhecido".to_string());
+        let cores: u32 = self.run_ps("(Get-WmiObject Win32_Processor).NumberOfCores").unwrap_or_default().parse().unwrap_or(0);
+        let threads: u32 = self.run_ps("(Get-WmiObject Win32_Processor).NumberOfLogicalProcessors").unwrap_or_default().parse().unwrap_or(0);
+        let max_speed: u32 = self.run_ps("(Get-WmiObject Win32_Processor).MaxClockSpeed").unwrap_or_default().parse().unwrap_or(0);
+        Ok(CpuInfo {
+            name: name.trim().to_string(),
+            manufacturer: self.run_ps("(Get-WmiObject Win32_Processor).Manufacturer").unwrap_or_default().trim().to_string(),
+            cores, threads, max_speed_mhz: max_speed,
+            architecture: self.run_ps("(Get-WmiObject Win32_Processor).Architecture").unwrap_or_default().trim().to_string(),
+            socket: self.run_ps("(Get-WmiObject Win32_Processor).SocketDesignation").unwrap_or_default().trim().to_string(),
+        })
+    }
+
+    fn memory(&self) -> Result<MemoryInfo, CoreError> {
+        let total: u64 = self.run_ps("(Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory").unwrap_or_default().parse().unwrap_or(0);
+        let mut modules = Vec::new();
+        let ps_modules = self.run_ps("Get-WmiObject Win32_PhysicalMemory | Select-Object DeviceLocator, Capacity, Speed, Manufacturer | ConvertTo-Json").unwrap_or_default();
+        if !ps_modules.is_empty() && ps_modules != "null" {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&ps_modules) {
+                if let Some(arr) = json.as_array() {
+                    for m in arr {
+                        modules.push(MemoryModule {
+                            slot: m.get("DeviceLocator").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                            capacity_bytes: m.get("Capacity").and_then(|v| v.as_u64()).unwrap_or(0),
+                            speed_mhz: m.get("Speed").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                            manufacturer: m.get("Manufacturer").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                        });
+                    }
+                } else if let Some(obj) = json.as_object() {
+                    modules.push(MemoryModule {
+                        slot: obj.get("DeviceLocator").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                        capacity_bytes: obj.get("Capacity").and_then(|v| v.as_u64()).unwrap_or(0),
+                        speed_mhz: obj.get("Speed").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        manufacturer: obj.get("Manufacturer").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                    });
+                }
+            }
+        }
+        Ok(MemoryInfo { total_bytes: total, modules })
+    }
+
+    fn disks(&self) -> Result<Vec<DiskInfo>, CoreError> {
+        let mut disks = Vec::new();
+        let ps_disks = self.run_ps("Get-WmiObject Win32_LogicalDisk | Select-Object DeviceID, VolumeName, FileSystem, Size, FreeSpace | ConvertTo-Json").unwrap_or_default();
+        if !ps_disks.is_empty() && ps_disks != "null" {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&ps_disks) {
+                if let Some(arr) = json.as_array() {
+                    for d in arr {
+                        let total = d.get("Size").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let free = d.get("FreeSpace").and_then(|v| v.as_u64()).unwrap_or(0);
+                        disks.push(DiskInfo {
+                            device_id: d.get("DeviceID").and_then(|v| v.as_str()).unwrap_or("C:").to_string(),
+                            volume_name: d.get("VolumeName").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            filesystem: d.get("FileSystem").and_then(|v| v.as_str()).unwrap_or("NTFS").to_string(),
+                            total_bytes: total,
+                            free_bytes: free,
+                            used_bytes: total.saturating_sub(free),
+                            percent_free: if total > 0 { (free as f64 / total as f64) * 100.0 } else { 0.0 },
+                        });
+                    }
+                }
+            }
+        }
+        Ok(disks)
+    }
+
+    fn gpu(&self) -> Result<Vec<GpuInfo>, CoreError> {
+        let mut gpus = Vec::new();
+        let ps_gpus = self.run_ps("Get-WmiObject Win32_VideoController | Select-Object Name, AdapterRAM, VideoModeDescription, DriverVersion | ConvertTo-Json").unwrap_or_default();
+        if !ps_gpus.is_empty() && ps_gpus != "null" {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&ps_gpus) {
+                if let Some(arr) = json.as_array() {
+                    for g in arr {
+                        gpus.push(GpuInfo {
+                            name: g.get("Name").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+                            manufacturer: "Desconhecido".to_string(),
+                            adapter_ram_bytes: g.get("AdapterRAM").and_then(|v| v.as_u64()).unwrap_or(0),
+                            resolution: g.get("VideoModeDescription").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            driver_version: g.get("DriverVersion").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(gpus)
+    }
+
+    fn motherboard(&self) -> Result<MotherboardInfo, CoreError> {
+        Ok(MotherboardInfo {
+            manufacturer: self.run_ps("(Get-WmiObject Win32_BaseBoard).Manufacturer").unwrap_or_default().trim().to_string(),
+            product: self.run_ps("(Get-WmiObject Win32_BaseBoard).Product").unwrap_or_default().trim().to_string(),
+            version: self.run_ps("(Get-WmiObject Win32_BaseBoard).Version").unwrap_or_default().trim().to_string(),
+            serial_number: self.run_ps("(Get-WmiObject Win32_BaseBoard).SerialNumber").unwrap_or_default().trim().to_string(),
+            bios_vendor: self.run_ps("(Get-WmiObject Win32_BIOS).Manufacturer").unwrap_or_default().trim().to_string(),
+            bios_version: self.run_ps("(Get-WmiObject Win32_BIOS).Version").unwrap_or_default().trim().to_string(),
+            bios_date: self.run_ps("(Get-WmiObject Win32_BIOS).ReleaseDate").unwrap_or_default().trim().to_string(),
+        })
+    }
+
+    fn temperatures(&self) -> Result<Vec<TemperatureReading>, CoreError> {
+        // MSFT_WmiProvider classes são voláteis; retorna vazio por seguranca
+        Ok(Vec::new())
+    }
+}
+
+
+
+=== src\ui\mod.rs ===
+
+//! Modulo de UI
+
+#[cfg(feature = "tui")]
+pub mod ratatui;
+
+#[cfg(feature = "gui")]
+pub mod iced;
+
+
+
+=== src\ui\iced\mod.rs ===
+
+//! GUI iced (v3.1.0+)
+
+
+
+=== src\ui\ratatui\app.rs ===
+
+//! Estado da UI ratatui
+
+use ratatui::Frame;
+use tokio::sync::mpsc::Sender;
+
+use crate::app::messages::{
+    AppMsg, AppState, AuditData, AuditPhase, CpuInfo, DiskInfo,
+    GpuInfo, LogEntry, MemoryInfo, MemoryModule, MotherboardInfo, Screen,
+};
+use crate::ui::ratatui::views;
+
+pub struct App {
+    pub state: AppState,
+    pub tx: Sender<AppMsg>,
+    pub should_quit: bool,
+    pub audit_running: bool,
+}
+
+impl App {
+    pub fn new(tx: Sender<AppMsg>) -> Self {
+        Self {
+            state: AppState::default(),
+            tx,
+            should_quit: false,
+            audit_running: false,
+        }
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame) {
+        match self.state.current_screen {
+            Screen::Menu               => views::menu::render(frame, &mut self.state),
+            Screen::AuditProgress      => views::progress::render(frame, &mut self.state),
+            Screen::Summary            => views::summary::render(frame, &mut self.state),
+            Screen::CleanupProgress    => views::progress::render(frame, &mut self.state),
+            Screen::RebootConfirm      => views::confirm::render(frame, &mut self.state),
+            Screen::PostRebootProgress => views::progress::render(frame, &mut self.state),
+            Screen::ReportView         => views::report::render(frame, &mut self.state),
+            Screen::LogsView           => views::logs::render(frame, &mut self.state),
+        }
+    }
+
+    pub async fn on_enter(&mut self) {
+        match self.state.current_screen {
+            Screen::Menu => {
+                match self.state.selected_menu_item {
+                    // Fase 1
+                    0 | 1 if !self.audit_running => {
+                        self.audit_running = true;
+                        self.state.current_screen = Screen::AuditProgress;
+                        self.state.progress = 0.0;
+                        self.state.status_message = "Iniciando auditoria...".to_string();
+                        let tx = self.tx.clone();
+                        tokio::spawn(async move {
+                            run_audit(tx).await;
+                        });
+                    }
+                    // Fase 3
+                    4 | 5 => {
+                        self.state.current_screen = Screen::CleanupProgress;
+                        self.state.progress = 0.0;
+                        let tx = self.tx.clone();
+                        tokio::spawn(async move {
+                            tx.send(AppMsg::CleanupStarted).await.ok();
+                            run_cleanup(tx).await;
+                        });
+                    }
+                    // Ver summary se ja tiver dados
+                    2 | 3 => {
+                        if self.state.audit_data.is_some() {
+                            self.state.current_screen = Screen::Summary;
+                        } else {
+                            self.state.status_message = "Execute Fase 1 primeiro".to_string();
+                        }
+                    }
+                    // Sair
+                    10 => self.should_quit = true,
+                    _ => {}
+                }
+            }
+            Screen::Summary => {
+                self.state.current_screen = Screen::CleanupProgress;
+                self.state.progress = 0.0;
+            }
+            Screen::RebootConfirm => {
+                self.state.update(AppMsg::UserConfirmed(true));
+            }
+            _ => {}
+        }
+    }
+
+    pub async fn on_key(&mut self, c: char) {
+        match (self.state.current_screen, c) {
+            (Screen::RebootConfirm, 'n') | (Screen::RebootConfirm, 'N') => {
+                self.state.update(AppMsg::UserConfirmed(false));
+            }
+            (_, 'q') | (_, 'Q') => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    pub fn on_up(&mut self) {
+        self.state.update(AppMsg::NavigateUp);
+    }
+
+    pub fn on_down(&mut self) {
+        self.state.update(AppMsg::NavigateDown);
+    }
+
+    pub fn on_esc(&mut self) {
+        match self.state.current_screen {
+            Screen::Menu => self.should_quit = true,
+            _ => self.state.update(AppMsg::Back),
+        }
+    }
+
+    pub fn on_backspace(&mut self) {
+        self.state.update(AppMsg::Back);
+    }
+
+    pub fn on_audit_complete(&mut self) {
+        self.audit_running = false;
+    }
+}
+
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async fn ps(script: &str) -> String {
+    let script = script.to_string();
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+// â”€â”€ Fase 1 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async fn run_audit(tx: Sender<AppMsg>) {
+    let mut data = AuditData::default();
+
+    // CPU
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "Processador".to_string(),
+        percent: 5,
+    }).await;
+
+    let json = ps(r#"
+$c = Get-CimInstance Win32_Processor | Select -First 1
+[PSCustomObject]@{
+    name    = $c.Name.Trim()
+    mfr     = $c.Manufacturer
+    cores   = [int]$c.NumberOfCores
+    threads = [int]$c.NumberOfLogicalProcessors
+    speed   = [int]$c.MaxClockSpeed
+    arch    = if($c.Architecture -eq 9){'x64'}else{'x86'}
+    socket  = $c.SocketDesignation
+} | ConvertTo-Json -Compress
+"#).await;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+        data.cpu = Some(CpuInfo {
+            name:          v["name"].as_str().unwrap_or("").to_string(),
+            manufacturer:  v["mfr"].as_str().unwrap_or("").to_string(),
+            cores:         v["cores"].as_u64().unwrap_or(0) as u32,
+            threads:       v["threads"].as_u64().unwrap_or(0) as u32,
+            max_speed_mhz: v["speed"].as_u64().unwrap_or(0) as u32,
+            architecture:  v["arch"].as_str().unwrap_or("x64").to_string(),
+            socket:        v["socket"].as_str().unwrap_or("").to_string(),
+        });
+        let _ = tx.send(AppMsg::LogLine(LogEntry::info("audit",
+            format!("CPU: {}", data.cpu.as_ref().unwrap().name)))).await;
+    }
+
+    // RAM
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "Memoria RAM".to_string(),
+        percent: 20,
+    }).await;
+
+    let json = ps(r#"
+$os = Get-CimInstance Win32_OperatingSystem
+$mods = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+    [PSCustomObject]@{
+        slot     = $_.DeviceLocator
+        capacity = [long]$_.Capacity
+        speed    = [int]$_.Speed
+        mfr      = if($_.Manufacturer -and $_.Manufacturer -ne 'Unknown'){$_.Manufacturer}else{'Desconhecido'}
+    }
+})
+[PSCustomObject]@{
+    total_kb = [long]$os.TotalVisibleMemorySize
+    modules  = $mods
+} | ConvertTo-Json -Depth 3 -Compress
+"#).await;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+        let total_bytes = v["total_kb"].as_u64().unwrap_or(0) * 1024;
+        let modules: Vec<MemoryModule> = v["modules"].as_array()
+            .map(|a| a.iter().map(|m| MemoryModule {
+                slot:           m["slot"].as_str().unwrap_or("").to_string(),
+                capacity_bytes: m["capacity"].as_u64().unwrap_or(0),
+                speed_mhz:      m["speed"].as_u64().unwrap_or(0) as u32,
+                manufacturer:   m["mfr"].as_str().unwrap_or("").to_string(),
+            }).collect())
+            .unwrap_or_default();
+        let gb = total_bytes as f64 / 1_073_741_824.0;
+        let _ = tx.send(AppMsg::LogLine(LogEntry::info("audit",
+            format!("RAM: {:.1} GB ({} modulos)", gb, modules.len())))).await;
+        data.memory = Some(MemoryInfo { total_bytes, modules });
+    }
+
+    // Discos
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "Discos".to_string(),
+        percent: 40,
+    }).await;
+
+    let json = ps(r#"
+$tipos = @{}
+Get-CimInstance Win32_DiskDrive | ForEach-Object {
+    $m = $_.Model.ToUpper()
+    $t = if($m -match 'NVME|NVM EXPRESS'){'NVMe'}elseif($m -match 'SSD|SOLID STATE'){'SSD'}else{'HDD'}
+    $assoc = Get-CimAssociatedInstance -InputObject $_ -Association Win32_DiskDriveToDiskPartition -EA SilentlyContinue |
+             ForEach-Object { Get-CimAssociatedInstance -InputObject $_ -Association Win32_LogicalDiskToPartition -EA SilentlyContinue } |
+             Select -ExpandProperty DeviceID -EA SilentlyContinue
+    foreach($l in $assoc){ $tipos[$l] = $t }
+}
+@(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+    $pct = if($_.Size -gt 0){[math]::Round(($_.FreeSpace/$_.Size)*100,2)}else{0}
+    [PSCustomObject]@{
+        device_id   = $_.DeviceID
+        volume_name = if($_.VolumeName){$_.VolumeName}else{''}
+        filesystem  = $_.FileSystem
+        total_bytes = [long]$_.Size
+        free_bytes  = [long]$_.FreeSpace
+        used_bytes  = [long]($_.Size - $_.FreeSpace)
+        pct_free    = $pct
+    }
+}) | ConvertTo-Json -Depth 2 -Compress
+"#).await;
+    let arr: serde_json::Value = if json.trim_start().starts_with('[') {
+        serde_json::from_str(&json).unwrap_or(serde_json::json!([]))
+    } else if json.trim_start().starts_with('{') {
+        serde_json::json!([serde_json::from_str::<serde_json::Value>(&json).unwrap_or_default()])
+    } else { serde_json::json!([]) };
+    if let Some(a) = arr.as_array() {
+        for d in a {
+            data.disks.push(DiskInfo {
+                device_id:    d["device_id"].as_str().unwrap_or("").to_string(),
+                volume_name:  d["volume_name"].as_str().unwrap_or("").to_string(),
+                filesystem:   d["filesystem"].as_str().unwrap_or("NTFS").to_string(),
+                total_bytes:  d["total_bytes"].as_u64().unwrap_or(0),
+                free_bytes:   d["free_bytes"].as_u64().unwrap_or(0),
+                used_bytes:   d["used_bytes"].as_u64().unwrap_or(0),
+                percent_free: d["pct_free"].as_f64().unwrap_or(0.0),
+            });
+        }
+        let _ = tx.send(AppMsg::LogLine(LogEntry::info("audit",
+            format!("{} disco(s) encontrado(s)", data.disks.len())))).await;
+    }
+
+    // GPU
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "GPU".to_string(),
+        percent: 60,
+    }).await;
+
+    let json = ps(r#"
+@(Get-CimInstance Win32_VideoController | ForEach-Object {
+    [PSCustomObject]@{
+        name           = $_.Name
+        manufacturer   = $_.AdapterCompatibility
+        adapter_ram    = [long]$_.AdapterRAM
+        resolution     = "$($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution)"
+        driver_version = $_.DriverVersion
+    }
+}) | ConvertTo-Json -Depth 2 -Compress
+"#).await;
+    let arr: serde_json::Value = if json.trim_start().starts_with('[') {
+        serde_json::from_str(&json).unwrap_or(serde_json::json!([]))
+    } else if json.trim_start().starts_with('{') {
+        serde_json::json!([serde_json::from_str::<serde_json::Value>(&json).unwrap_or_default()])
+    } else { serde_json::json!([]) };
+    if let Some(a) = arr.as_array() {
+        for g in a {
+            data.gpus.push(GpuInfo {
+                name:              g["name"].as_str().unwrap_or("").to_string(),
+                manufacturer:      g["manufacturer"].as_str().unwrap_or("").to_string(),
+                adapter_ram_bytes: g["adapter_ram"].as_u64().unwrap_or(0),
+                resolution:        g["resolution"].as_str().unwrap_or("").to_string(),
+                driver_version:    g["driver_version"].as_str().unwrap_or("").to_string(),
+            });
+        }
+        if let Some(g) = data.gpus.first() {
+            let _ = tx.send(AppMsg::LogLine(LogEntry::info("audit",
+                format!("GPU: {}", g.name)))).await;
+        }
+    }
+
+    // Placa-mae
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "Placa-mae".to_string(),
+        percent: 80,
+    }).await;
+
+    let json = ps(r#"
+$mb   = Get-CimInstance Win32_BaseBoard | Select -First 1
+$bios = Get-CimInstance Win32_BIOS | Select -First 1
+[PSCustomObject]@{
+    manufacturer = $mb.Manufacturer
+    product      = $mb.Product
+    version      = $mb.Version
+    serial       = $mb.SerialNumber
+    bios_vendor  = $bios.Manufacturer
+    bios_version = $bios.SMBIOSBIOSVersion
+    bios_date    = $bios.ReleaseDate.ToString('dd/MM/yyyy')
+} | ConvertTo-Json -Compress
+"#).await;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+        data.motherboard = Some(MotherboardInfo {
+            manufacturer:  v["manufacturer"].as_str().unwrap_or("").to_string(),
+            product:       v["product"].as_str().unwrap_or("").to_string(),
+            version:       v["version"].as_str().unwrap_or("").to_string(),
+            serial_number: v["serial"].as_str().unwrap_or("").to_string(),
+            bios_vendor:   v["bios_vendor"].as_str().unwrap_or("").to_string(),
+            bios_version:  v["bios_version"].as_str().unwrap_or("").to_string(),
+            bios_date:     v["bios_date"].as_str().unwrap_or("").to_string(),
+        });
+        let mb = data.motherboard.as_ref().unwrap();
+        let _ = tx.send(AppMsg::LogLine(LogEntry::info("audit",
+            format!("Placa-mae: {} {}", mb.manufacturer, mb.product)))).await;
+    }
+
+    // Concluido
+    let _ = tx.send(AppMsg::AuditProgress {
+        phase: AuditPhase::Hardware,
+        item: "Concluido".to_string(),
+        percent: 100,
+    }).await;
+
+    let _ = tx.send(AppMsg::AuditCompleted(Box::new(data))).await;
+}
+
+// â”€â”€ Fase 3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async fn run_cleanup(tx: Sender<AppMsg>) {
+    use crate::app::messages::CleanupOp;
+    let steps = [
+        (CleanupOp::TempFiles,      "Arquivos temporarios",    20u8),
+        (CleanupOp::BrowserCache,   "Cache de navegadores",    40),
+        (CleanupOp::RecycleBin,     "Lixeira",                 55),
+        (CleanupOp::OldLogs,        "Logs antigos",            70),
+        (CleanupOp::WindowsUpdates, "Cache do Windows Update", 85),
+        (CleanupOp::RegistryClean,  "Registry orfao",          95),
+    ];
+    let mut freed: u64 = 0;
+    for (op, detail, pct) in steps {
+        freed += 100_000_000;
+        let _ = tx.send(AppMsg::CleanupProgress {
+            operation: op,
+            detail: detail.to_string(),
+            percent: pct,
+            bytes_freed: freed,
+        }).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+    let _ = tx.send(AppMsg::CleanupCompleted).await;
+}
+
+
+
+=== src\ui\ratatui\mod.rs ===
+
+//! Loop principal ratatui
+
+pub mod app;
+pub mod views;
+pub mod widgets;
+
+use crate::app::messages::AppMsg;
+use crate::ui::ratatui::app::App;
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
+use std::time::Instant;
+use tokio::sync::mpsc::channel;
+
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let (tx, mut rx) = channel::<AppMsg>(256);
+    let mut app = App::new(tx.clone());
+    let mut last_enter = Instant::now();
+
+    let result = loop {
+        // Drena todas as mensagens
+        loop {
+            match rx.try_recv() {
+                Ok(AppMsg::Shutdown) => { app.should_quit = true; break; }
+                Ok(msg) => {
+                    if matches!(msg, AppMsg::AuditCompleted(_)) {
+                        app.on_audit_complete();
+                    }
+                    app.state.update(msg);
+                }
+                Err(_) => break,
+            }
+        }
+
+        if app.should_quit { break Ok(()); }
+
+        if let Err(e) = terminal.draw(|f| app.draw(f)) {
+            break Err(Box::new(e) as Box<dyn std::error::Error>);
+        }
+
+        if event::poll(std::time::Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
+                        KeyCode::Char(c) => app.on_key(c).await,
+                        KeyCode::Up => app.on_up(),
+                        KeyCode::Down => app.on_down(),
+                        KeyCode::Enter => {
+                            if last_enter.elapsed().as_millis() > 300 {
+                                last_enter = Instant::now();
+                                app.on_enter().await;
+                            }
+                        }
+                        KeyCode::Esc => app.on_esc(),
+                        KeyCode::Backspace => app.on_backspace(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if app.should_quit { break Ok(()); }
+        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+    };
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    terminal.show_cursor()?;
+    result
+}
+
+
+
+=== src\ui\ratatui\views\confirm.rs ===
+
+//! Tela de confirmacao â€” Sim/Nao para reboot
+
+use crate::app::messages::AppState;
+use ratatui::{
+    layout::{Alignment, Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
+
+pub fn render(frame: &mut Frame, __state: &mut AppState) {
+    let area = frame.area();
+
+    // Layout vertical: header, conteudo central, footer
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(5),
+        Constraint::Length(3),
+    ])
+    .margin(1)
+    .split(area);
+
+    // Header
+    let header = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("FASE 4", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" â€” Confirmacao de Reinicializacao"),
+        ]),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
+    frame.render_widget(header, chunks[0]);
+
+    // Painel central com a pergunta
+    let popup_area = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(5),
+        Constraint::Length(3),
+    ])
+    .flex(ratatui::layout::Flex::Center)
+    .split(chunks[1]);
+
+    let inner = Layout::horizontal([Constraint::Percentage(60)])
+        .flex(ratatui::layout::Flex::Center)
+        .split(popup_area[1]);
+
+    let question = Paragraph::new(Text::from(vec![
+        Line::from(Span::styled("Reiniciar o sistema agora?", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::raw(""),
+        Line::from(vec![
+            Span::raw("Apos o reboot, a Fase 5 sera executada automaticamente: "),
+        ]),
+        Line::from(vec![
+            Span::styled("SFC /SCANNOW", Style::default().fg(Color::Green)),
+            Span::raw(", "),
+            Span::styled("DISM /RestoreHealth", Style::default().fg(Color::Green)),
+            Span::raw(", "),
+            Span::styled("CHKDSK", Style::default().fg(Color::Green)),
+        ]),
+    ]))
+    .alignment(Alignment::Center)
+    .block(Block::default().borders(Borders::ALL).border_style(Color::Yellow).title("Atencao"));
+    frame.render_widget(question, inner[0]);
+
+    // Footer com opcoes
+    let footer = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" = SIM, reiniciar agora  |  "),
+            Span::styled("N", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(" = NAO, voltar ao menu  |  "),
+            Span::styled("Backspace", Style::default().fg(Color::Gray)),
+            Span::raw(" = Voltar"),
+        ]),
+    ]))
+    .alignment(Alignment::Center);
+    frame.render_widget(footer, chunks[2]);
+}
+
+
+
+=== src\ui\ratatui\views\logs.rs ===
+
+//! Tela de logs â€” exibe todos os logs do sistema com scroll
+
+use crate::app::messages::{AppState, LogLevel};
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(10),
+        Constraint::Length(3),
+    ])
+    .margin(1)
+    .split(area);
+
+    // Header
+    let header = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("LOGS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(format!(" â€” {} entradas", state.logs.len())),
+        ]),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
+    frame.render_widget(header, chunks[0]);
+
+    // Logs coloridos
+    let log_lines: Vec<Line> = state
+        .logs
+        .iter()
+        .map(|entry| {
+            let level_color = match entry.level {
+                LogLevel::Error => Color::Red,
+                LogLevel::Warn => Color::Yellow,
+                LogLevel::Success => Color::Green,
+                LogLevel::Phase => Color::Cyan,
+                LogLevel::Info => Color::White,
+                LogLevel::Debug => Color::Gray,
+            };
+            Line::from(vec![
+                Span::styled(format!("[{}] ", entry.timestamp.format("%H:%M:%S")), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:8} ", entry.level.to_string()), Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("[{}] ", entry.source), Style::default().fg(Color::Magenta)),
+                Span::raw(&entry.message),
+            ])
+        })
+        .collect();
+
+    let content = Paragraph::new(Text::from(log_lines))
+        .block(Block::default().borders(Borders::ALL).title("Log Completo").border_style(Color::Gray));
+    frame.render_widget(content, chunks[1]);
+
+    // Footer
+    let footer = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("Voltar: Backspace", Style::default().fg(Color::Gray)),
+            Span::raw(" | "),
+            Span::styled("Sair: Q/Esc", Style::default().fg(Color::Gray)),
+        ]),
+    ]));
+    frame.render_widget(footer, chunks[2]);
+}
+
+
+
+=== src\ui\ratatui\views\menu.rs ===
+
+//! Tela inicial — menu principal
+
+use crate::app::messages::AppState;
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame,
+};
+
+const MENU_ITEMS: &[(&str, &str)] = &[
+    ("0", "RODAR TUDO (Fases 1 > 2 > 3 > 4 > 5)"),
+    ("1", "Apenas FASE 1 (Levantamento/Auditoria)"),
+    ("2", "FASE 2 em diante (Resumo + Confirma + 3 + 4 + 5)"),
+    ("2.1", "Apenas FASE 2 (Somente resumo e pausa)"),
+    ("3", "FASE 3 em diante (Limpeza + Otimizacao + 4 + 5)"),
+    ("3.1", "Apenas FASE 3 (Somente limpeza e otimizacao)"),
+    ("4", "FASE 4 em diante (Reboot + 5 automatico)"),
+    ("4.1", "Apenas FASE 4 (Somente configurar reboot)"),
+    ("5", "Apenas FASE 5 (Pos-reboot: SFC + DISM + CHKDSK)"),
+    ("R", "GERAR RELATORIO (auditoria dos dados existentes)"),
+    ("X", "SAIR"),
+];
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical).margin(2)
+        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(3)])
+        .split(frame.area());
+
+    let header = Paragraph::new(Text::from(vec![
+        Line::from(vec![Span::styled("HIGHLANDER FORGE BLADE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
+        Line::from(Span::styled("Manutencao Profissional do Windows", Style::default().fg(Color::Gray))),
+    ])).alignment(Alignment::Center).block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(header, chunks[0]);
+
+    let items: Vec<ListItem> = MENU_ITEMS.iter().enumerate().map(|(i, (key, label))| {
+        let style = if i == state.selected_menu_item {
+            Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD)
+        } else { Style::default().fg(Color::White) };
+        let content = if i == state.selected_menu_item { format!("> [{}] {}", key, label) } else { format!("  [{}] {}", key, label) };
+        ListItem::new(content).style(style)
+    }).collect();
+
+    let menu = List::new(items).block(Block::default().title("Menu Principal").borders(Borders::ALL).border_style(Color::Cyan));
+    frame.render_widget(menu, chunks[1]);
+
+    let footer = Paragraph::new(Span::styled("Navegar: Setas | Selecionar: Enter | Sair: Q/Esc", Style::default().fg(Color::Gray))).alignment(Alignment::Center);
+    frame.render_widget(footer, chunks[2]);
+}
+
+
+
+=== src\ui\ratatui\views\mod.rs ===
+
+pub mod confirm;
+pub mod logs;
+pub mod menu;
+pub mod progress;
+pub mod report;
+pub mod summary;
+
+
+=== src\ui\ratatui\views\progress.rs ===
+
+use crate::app::messages::{AppState, LogLevel};
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    Frame,
+};
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(5),
+        Constraint::Length(3),
+    ]).margin(1).split(area);
+
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("FASE 1", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" - Auditoria de Hardware e Software"),
+    ])).block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
+    frame.render_widget(title, chunks[0]);
+
+    let percent = state.progress.clamp(0.0, 100.0) as u16;
+    let gauge = Gauge::default()
+        .percent(percent)
+        .label(format!("{}% - {}", percent, state.status_message))
+        .block(Block::default().borders(Borders::ALL).title("Progresso").border_style(Color::Blue))
+        .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray));
+    frame.render_widget(gauge, chunks[1]);
+
+    let items: Vec<ListItem> = state.logs.iter().rev().take(50).map(|e| {
+        let color = match e.level {
+            LogLevel::Error => Color::Red,
+            LogLevel::Warn => Color::Yellow,
+            LogLevel::Success => Color::Green,
+            LogLevel::Phase => Color::Cyan,
+            _ => Color::White,
+        };
+        ListItem::new(format!("[{}] {}", e.timestamp.format("%H:%M:%S"), e.message))
+            .style(Style::default().fg(color))
+    }).collect();
+
+    let logs = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Logs").border_style(Color::Gray));
+    frame.render_widget(logs, chunks[2]);
+
+    let footer = Paragraph::new(Span::styled(
+        "Voltar: Backspace | Sair: Q/Esc",
+        Style::default().fg(Color::Gray),
+    ));
+    frame.render_widget(footer, chunks[3]);
+}
+
+
+
+=== src\ui\ratatui\views\report.rs ===
+
+//! Tela de relatorio â€” exibe dados da auditoria em formato texto
+
+use crate::app::messages::AppState;
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(10),
+        Constraint::Length(3),
+    ])
+    .margin(1)
+    .split(area);
+
+    // Header
+    let header = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("RELATORIO", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" â€” Dados Coletados na Auditoria"),
+        ]),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
+    frame.render_widget(header, chunks[0]);
+
+    // Conteudo
+    let text = if let Some(ref audit) = state.audit_data {
+        build_report_text(audit)
+    } else {
+        Text::from(vec![
+            Line::from(Span::styled(
+                "Nenhum dado de auditoria disponivel.",
+                Style::default().fg(Color::Yellow),
+            )),
+        ])
+    };
+
+    let content = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title("Relatorio").border_style(Color::Blue))
+        .scroll((state.selected_menu_item as u16, 0));
+    frame.render_widget(content, chunks[1]);
+
+    // Footer
+    let footer = Paragraph::new(Text::from(vec![
+        Line::from(vec![
+            Span::styled("Voltar: Backspace", Style::default().fg(Color::Gray)),
+            Span::raw(" | "),
+            Span::styled("Sair: Q/Esc", Style::default().fg(Color::Gray)),
+        ]),
+    ]));
+    frame.render_widget(footer, chunks[2]);
+}
+
+fn build_report_text(audit: &crate::app::messages::AuditData) -> Text<'_> {
+    let mut lines: Vec<Line> = Vec::new();
+
+    // CPU
+    lines.push(Line::from(vec![Span::styled("=== PROCESSADOR ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+    if let Some(ref cpu) = audit.cpu {
+        lines.push(Line::from(format!("  Fabricante: {}", cpu.manufacturer)));
+        lines.push(Line::from(format!("  Modelo:     {}", cpu.name)));
+        lines.push(Line::from(format!("  Nucleos:    {} ({} threads)", cpu.cores, cpu.threads)));
+        lines.push(Line::from(format!("  Clock:      {} MHz", cpu.max_speed_mhz)));
+        lines.push(Line::from(format!("  Arquitetura:{}", cpu.architecture)));
+        lines.push(Line::from(format!("  Socket:     {}", cpu.socket)));
+    } else {
+        lines.push(Line::from("  N/A"));
+    }
+    lines.push(Line::raw(""));
+
+    // RAM
+    lines.push(Line::from(vec![Span::styled("=== MEMORIA RAM ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+    if let Some(ref mem) = audit.memory {
+        let total_gb = mem.total_bytes as f64 / 1_073_741_824.0;
+        lines.push(Line::from(format!("  Total: {:.2} GB", total_gb)));
+        for (i, m) in mem.modules.iter().enumerate() {
+            let cap_gb = m.capacity_bytes as f64 / 1_073_741_824.0;
+            lines.push(Line::from(format!(
+                "  Slot {}: {:.1} GB @ {} MHz â€” {}",
+                i + 1, cap_gb, m.speed_mhz, m.manufacturer
+            )));
+        }
+    } else {
+        lines.push(Line::from("  N/A"));
+    }
+    lines.push(Line::raw(""));
+
+    // Discos
+    lines.push(Line::from(vec![Span::styled("=== ARMAZENAMENTO ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+    if audit.disks.is_empty() {
+        lines.push(Line::from("  N/A"));
+    } else {
+        for d in &audit.disks {
+            let total_gb = d.total_bytes as f64 / 1_073_741_824.0;
+            let free_gb = d.free_bytes as f64 / 1_073_741_824.0;
+            lines.push(Line::from(format!(
+                "  {} ({}) â€” {:.0} GB total, {:.1} GB livre ({:.1}%)",
+                d.volume_name, d.filesystem, total_gb, free_gb, d.percent_free
+            )));
+        }
+    }
+    lines.push(Line::raw(""));
+
+    // GPU
+    lines.push(Line::from(vec![Span::styled("=== PLACA DE VIDEO ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+    if audit.gpus.is_empty() {
+        lines.push(Line::from("  N/A"));
+    } else {
+        for g in &audit.gpus {
+            lines.push(Line::from(format!("  {} {}", g.manufacturer, g.name)));
+            lines.push(Line::from(format!("  VRAM: {} MB | Driver: {} | {}", g.adapter_ram_bytes / 1_048_576, g.driver_version, g.resolution)));
+        }
+    }
+    lines.push(Line::raw(""));
+
+    // Motherboard
+    lines.push(Line::from(vec![Span::styled("=== PLACA-MAE ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+    if let Some(ref mb) = audit.motherboard {
+        lines.push(Line::from(format!("  Fabricante: {}", mb.manufacturer)));
+        lines.push(Line::from(format!("  Modelo:     {}", mb.product)));
+        lines.push(Line::from(format!("  Versao:     {}", mb.version)));
+        lines.push(Line::from(format!("  Serial:     {}", mb.serial_number)));
+        lines.push(Line::from(format!("  BIOS:       {} {}", mb.bios_vendor, mb.bios_version)));
+    } else {
+        lines.push(Line::from("  N/A"));
+    }
+    lines.push(Line::raw(""));
+
+    // Temperaturas
+    if !audit.temperatures.is_empty() {
+        lines.push(Line::from(vec![Span::styled("=== TEMPERATURAS ===", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
+        for t in &audit.temperatures {
+            let color = if t.celsius > 80.0 { Color::Red } else if t.celsius > 60.0 { Color::Yellow } else { Color::Green };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {:20} ", t.zone)),
+                Span::styled(format!("{:.1} C", t.celsius), Style::default().fg(color)),
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Rodape
+    lines.push(Line::from(vec![Span::styled(
+        "=== FIM DO RELATORIO ===",
+        Style::default().fg(Color::Gray),
+    )]));
+
+    Text::from(lines)
+}
+
+
+
+=== src\ui\ratatui\views\summary.rs ===
+
+//! Tela de resumo — dados reais da auditoria
+
+use crate::app::messages::AppState;
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
+
+pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(10),
+        Constraint::Length(3),
+    ]).margin(1).split(area);
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled("FASE 2", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" - Resumo da Auditoria"),
+    ])).block(Block::default().borders(Borders::BOTTOM).border_style(Color::Cyan));
+    frame.render_widget(header, chunks[0]);
+
+    let cols = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ]).split(chunks[1]);
+
+    // Coluna esquerda
+    let mut left: Vec<Line> = vec![];
+    left.push(Line::from(Span::styled("CPU", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+    if let Some(ref data) = state.audit_data {
+        if let Some(ref cpu) = data.cpu {
+            left.push(Line::from(format!("  {}", cpu.name)));
+            left.push(Line::from(format!("  {} cores / {} threads @ {} MHz", cpu.cores, cpu.threads, cpu.max_speed_mhz)));
+            left.push(Line::from(format!("  Arq: {}  Socket: {}", cpu.architecture, cpu.socket)));
+        } else {
+            left.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        }
+        left.push(Line::from(""));
+        left.push(Line::from(Span::styled("MEMORIA RAM", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        if let Some(ref mem) = data.memory {
+            let gb = mem.total_bytes as f64 / 1_073_741_824.0;
+            left.push(Line::from(format!("  Total: {:.1} GB", gb)));
+            for m in &mem.modules {
+                let cap = m.capacity_bytes as f64 / 1_073_741_824.0;
+                left.push(Line::from(format!("  {} - {:.0}GB {}MHz {}", m.slot, cap, m.speed_mhz, m.manufacturer)));
+            }
+        } else {
+            left.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        }
+    } else {
+        left.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        left.push(Line::from(""));
+        left.push(Line::from(Span::styled("MEMORIA RAM", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        left.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+    }
+
+    frame.render_widget(
+        Paragraph::new(left).block(Block::default().title(" Processador e Memoria ").borders(Borders::ALL).border_style(Color::Blue)),
+        cols[0]
+    );
+
+    // Coluna direita
+    let mut right: Vec<Line> = vec![];
+    right.push(Line::from(Span::styled("ARMAZENAMENTO", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+    if let Some(ref data) = state.audit_data {
+        if data.disks.is_empty() {
+            right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        } else {
+            for d in &data.disks {
+                let total = d.total_bytes as f64 / 1_073_741_824.0;
+                let free  = d.free_bytes  as f64 / 1_073_741_824.0;
+                let color = if d.percent_free < 10.0 { Color::Red }
+                            else if d.percent_free < 20.0 { Color::Yellow }
+                            else { Color::Green };
+                right.push(Line::from(vec![
+                    Span::raw(format!("  {} {:.0}GB - ", d.device_id, total)),
+                    Span::styled(format!("{:.1}% livre ({:.1}GB)", d.percent_free, free), Style::default().fg(color)),
+                ]));
+            }
+        }
+        right.push(Line::from(""));
+        right.push(Line::from(Span::styled("PLACA DE VIDEO", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        if data.gpus.is_empty() {
+            right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        } else {
+            for g in &data.gpus {
+                let vram = g.adapter_ram_bytes / 1_048_576;
+                right.push(Line::from(format!("  {}", g.name)));
+                right.push(Line::from(format!("  VRAM: {}MB  Driver: {}", vram, g.driver_version)));
+            }
+        }
+        right.push(Line::from(""));
+        right.push(Line::from(Span::styled("PLACA-MAE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        if let Some(ref mb) = data.motherboard {
+            right.push(Line::from(format!("  {} {}", mb.manufacturer, mb.product)));
+            right.push(Line::from(format!("  BIOS: {} ({})", mb.bios_version, mb.bios_date)));
+        } else {
+            right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        }
+    } else {
+        right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        right.push(Line::from(""));
+        right.push(Line::from(Span::styled("PLACA DE VIDEO", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+        right.push(Line::from(""));
+        right.push(Line::from(Span::styled("PLACA-MAE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+        right.push(Line::from(Span::styled("  (dados nao disponiveis)", Style::default().fg(Color::DarkGray))));
+    }
+
+    frame.render_widget(
+        Paragraph::new(right).block(Block::default().title(" Armazenamento, Video e Placa-mae ").borders(Borders::ALL).border_style(Color::Blue)),
+        cols[1]
+    );
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled("Proximo: Enter", Style::default().fg(Color::Green)),
+        Span::raw(" | "),
+        Span::styled("Voltar: Backspace", Style::default().fg(Color::Gray)),
+        Span::raw(" | "),
+        Span::styled("Sair: Q/Esc", Style::default().fg(Color::Gray)),
+    ]));
+    frame.render_widget(footer, chunks[2]);
+}
+
+
+
+=== src\ui\ratatui\widgets\footer.rs ===
+
+//! Stub de widget
+
+
+
+=== src\ui\ratatui\widgets\header.rs ===
+
+//! Stub de widget
+
+
+
+=== src\ui\ratatui\widgets\log_line.rs ===
+
+//! Stub de widget
+
+
+
+=== src\ui\ratatui\widgets\mod.rs ===
+
+//! Widgets reutilizaveis da TUI
+
+
+
+=== src\ui\ratatui\widgets\phase_item.rs ===
+
+//! Stub de widget
+

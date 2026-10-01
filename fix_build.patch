@@ -1,0 +1,46 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -40,7 +40,7 @@ aes-gcm = "0.10"
+ rand = "0.8"
+ ed25519-dalek = { version = "2.1", features = ["alloc", "rand_core"] }
+ chrono = { version = "0.4", features = ["serde"] }
+-uuid = { version = "1.9", features = ["v4", "serde"] }
++uuid = { version = "1.9", features = ["v4", "v5", "serde"] }
+ semver = "1.0"
+ anyhow = "1.0"
+ thiserror = "1.0"
+diff --git a/src/app/state.rs b/src/app/state.rs
+--- a/src/app/state.rs
++++ b/src/app/state.rs
+@@ -172,7 +172,6 @@ pub fn clear_post_reboot_flag(cfg: &Config) -> Result<(), FlagError> {
+ #[cfg(windows)]
+ fn win_reg_run_once(command: &str) -> Result<(), FlagError> {
+     use windows::core::PCWSTR;
+-    use windows::Win32::Foundation::ERROR_SUCCESS;
+     use windows::Win32::System::Registry::{
+         RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
+     };
+@@ -187,8 +186,8 @@ fn win_reg_run_once(command: &str) -> Result<(), FlagError> {
+         let val: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+         let name: Vec<u16> = "HighlanderForgeBlade".encode_utf16().chain(std::iter::once(0)).collect();
+         let val_bytes = unsafe { std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 2) };
+-        let r = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(val_bytes));
+-        if r != ERROR_SUCCESS { return Err(FlagError::Io(format!("RegSetValueExW: {:?}", r))); }
++        RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(val_bytes))
++            .map_err(|e| FlagError::Io(format!("RegSetValueExW: {}", e)))?;
+         Ok(())
+     }
+ }
+diff --git a/src/logging.rs b/src/logging.rs
+--- a/src/logging.rs
++++ b/src/logging.rs
+@@ -10,7 +10,7 @@ use tracing_subscriber::{
+     fmt::{self},
+     layer::SubscriberExt,
+     util::SubscriberInitExt,
+-    EnvFilter, Registry,
++    EnvFilter,
+ };
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
