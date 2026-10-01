@@ -3,7 +3,7 @@
 > **Professional Windows Maintenance Engine — Rust-powered, TUI-first, Enterprise-ready**
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/highlanderviralcenter-lab/highlander-forge-blade/ci.yml?branch=main&style=flat-square&logo=github)](https://github.com/highlanderviralcenter-lab/highlander-forge-blade/actions)
-[![Crates.io](https://img.shields.io/badge/crates.io-v3.0.0--alpha.1-orange?style=flat-square&logo=rust)](https://crates.io/crates/highlander-forge-blade)
+[![Crates.io](https://img.shields.io/badge/crates.io-v3.0.0--alpha.2-orange?style=flat-square&logo=rust)](https://crates.io/crates/highlander-forge-blade)
 [![License](https://img.shields.io/badge/license-MIT%2FProprietary-blue?style=flat-square)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.78+-purple?style=flat-square&logo=rust)](https://blog.rust-lang.org/2024/05/02/Rust-1.78.0.html)
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
@@ -28,16 +28,27 @@
 
 | Feature | Status | Version |
 |---------|--------|---------|
-| 5-phase maintenance cycle (Audit → Cleanup → Reboot → Repair) | ✅ Stable | v3.0.0 |
-| Interactive TUI with real-time progress | ✅ Stable | v3.0.0 |
-| Headless mode with JSON output | ✅ Stable | v3.0.0 |
-| Auto-update with Ed25519 signature verification | ✅ Stable | v3.0.0 |
-| State persistence with automatic migration | ✅ Stable | v3.0.0 |
-| Dual-mode logging (human + JSON) | ✅ Stable | v3.0.0 |
-| Windows Credential Manager key storage | ✅ Stable | v3.0.0 |
+| Interactive TUI with real-time progress (menu, navigation) | ✅ Stable | v3.0.0-alpha.2 |
+| Phase 1 — Audit via PowerShell CIM (services, updates, disk) | ✅ Real data | v3.0.0-alpha.2 |
+| Phase 2 — Summary & confirmation | ✅ Stable | v3.0.0-alpha.2 |
+| Config TOML/JSON + `%PROGRAMDATA%` resolution | ✅ Stable | v3.0.0-alpha.2 |
+| State persistence with checksum + migration | ✅ Stable | v3.0.0-alpha.2 |
+| Rotating file logging (TUI-safe) | ✅ Stable | v3.0.0-alpha.2 |
+| UAC manifest (`requireAdministrator`) embedded in exe | ✅ Stable | v3.0.0-alpha.2 |
+| Cross-platform build (providers behind `ProviderFactory`) | ✅ Stable | v3.0.0-alpha.2 |
+| Headless engine (real phases 1/3/5, honest exit codes) | 🟡 Engine ready, CLI dispatcher pending | v3.0.x |
+| Phase 3 — Cleanup | ❌ **Simulated in TUI** (no real deletions yet) | v3.0.x |
+| Phase 4 — Scheduled reboot | ❌ Not implemented | v3.0.x |
+| Phase 5 — Post-reboot SFC/DISM/CHKDSK | ❌ Not implemented | v3.0.x |
+| Reports on disk (HTML/TXT/JSON) | ❌ Not implemented | v3.0.x |
+| Auto-update with Ed25519 signature verification | ❌ Design only — not implemented | v3.1.0 |
 | GUI with Iced (wizard + dashboard) | 🚧 In Progress | v3.1.0 |
 | Blake3 file indexing + deduplication | 📅 Planned | v3.2.0 |
 | SaaS fleet dashboard | 📅 Planned | v4.0.0 |
+
+> ⚠️ **Honesty note:** previous revisions of this document marked the 5-phase cycle,
+> headless JSON mode and auto-update as "✅ Stable". That was aspirational, not factual.
+> See [`STATUS.md`](STATUS.md) for the full component-by-component matrix.
 
 ---
 
@@ -56,25 +67,24 @@ Get-AuthenticodeSignature -FilePath ".\hfb.exe"
 .\hfb.exe
 ```
 
-### Interactive Mode (TUI)
+### Interactive Mode (TUI) — ✅ disponível hoje
 
 ```powershell
-# Launch interactive maintenance
-hfb
-
-# Or with specific phase
-hfb --auto-phase 1  # Audit only
+# Build a partir do fonte (Windows 10/11, execute como Administrador)
+cargo build --release
+.\target\release\hfb.exe        # abre o menu TUI (Fase 1 e 2 reais)
 ```
 
-### Headless Mode (MSP/RMM)
+### Headless / CLI — 🚧 planejado para alpha.3
+
+As flags abaixo **ainda não existem** no binário atual (o motor headless está pronto
+em `src/app/headless.rs`; falta apenas o dispatcher `clap` em `main.rs`):
 
 ```powershell
-# Full maintenance, JSON output
-hfb --auto-phase 0 --format=json --output="C:\Temp
-esult.json"
-
-# Simulation (preview without changes)
-hfb --what-if
+# hfb --auto-phase 1                        # Audit only
+# hfb --auto-phase 0 --format=json          # Full maintenance, JSON output
+# hfb --what-if                             # Simulation (preview sem alteracoes)
+# hfb --check-update                        # Verificar atualizacao (Ed25519)
 ```
 
 ---
@@ -158,11 +168,11 @@ graph TB
 
 ## Safety & Security
 
-- 🔒 **AES-256-GCM** state encryption via Windows Credential Manager
-- ✅ **Ed25519** signature verification for all updates
-- 🛡️ **No hardcoded secrets** — all keys generated at runtime or compile-time
-- 📝 **Structured audit logs** — every operation timestamped and logged
-- 🧪 **Mock-based testing** — CI runs on Linux with full test coverage
+- 📝 **Structured audit logs** — arquivo rotativo diario (`Logs/hfb.log.*`), timestamped
+- 🔐 **Integridade de estado** — checksum CRC32 no `state.json` com deteccao de tamper e migracao versionada
+- 🛡️ **Elevacao explicita** — manifest `requireAdministrator` embutido; o exe nao roda sem UAC
+- 🧪 **Testes unitarios reais** para config/estado/machine-id (CI em Linux possivel apos factory cross-platform)
+- ⚠️ *Planejado, ainda nao implementado:* AES-256-GCM via Credential Manager e verificacao Ed25519 de updates
 
 ---
 

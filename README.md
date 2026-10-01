@@ -2,28 +2,32 @@
 
 Manutencao profissional do Windows — engine Rust, UI TUI/GUI.
 
+> ⚠️ **Status (v3.0.0-alpha.2):** apenas as **Fases 1 e 2** estao funcionando de verdade
+> (via TUI). As Fases 3–5 ainda estao em desenvolvimento — a limpeza exibida na TUI e
+> simulada. Consulte [`docs/STATUS.md`](docs/STATUS.md) para a matriz completa do que
+> funciona, o que e stub e o que esta pendente. Nao confie nesta secao de recursos ate
+> que o changelog confirme cada item.
+
 ## Recursos
 
-- **Fase 1**: Auditoria completa (hardware, software, servicos, registry)
-- **Fase 2**: Resumo e confirmacao
-- **Fase 3**: Limpeza e otimizacao
-- **Fase 4**: Reinicializacao agendada
-- **Fase 5**: Pos-reboot (SFC, DISM, CHKDSK)
+- **Fase 1**: ✅ Auditoria real (servicos, updates pendentes, disco) via PowerShell CIM
+- **Fase 2**: ✅ Resumo e confirmacao na TUI
+- **Fase 3**: 🚧 Em desenvolvimento (atualmente simulada na TUI)
+- **Fase 4**: 🚧 Nao implementada (reinicializacao agendada)
+- **Fase 5**: 🚧 Nao implementada (pos-reboot SFC/DISM/CHKDSK)
+- ✅ Estado persistente versionado com checksum, config TOML/JSON, logs rotativos,
+  manifest UAC (`requireAdministrator`) embutido no exe
 
 ## Modos de Execucao
 
 ```bash
-# TUI interativo (padrao)
-hfb
+# TUI interativo (unico modo disponivel hoje)
+hfb            # ou: cargo run  (execute como Administrador)
 
-# Headless — automatizacao via RMM/GPO
-hfb --auto-phase 0 --format=json
-
-# Simulacao (sem alteracoes reais)
-hfb --what-if
-
-# Verificar atualizacoes
-hfb --check-update
+# --- As flags abaixo AINDA NAO EXISTEM (planejadas para alpha.3) ---
+# hfb --auto-phase 0 --format=json
+# hfb --what-if
+# hfb --check-update
 ```
 
 ## Compilacao

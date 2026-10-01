@@ -2,6 +2,11 @@
 
 > Secure, signed, atomic update mechanism.
 
+> ⚠️ **Status v3.0.0-alpha.2:** **nao implementado** (design-only). A verificacao Ed25519 e o
+> download atomico descritos aqui sao a especificacao alvo. Nota: caminhos `C:\ManutencaoWindows`
+> neste doc foram substituidos por `%PROGRAMDATA%\HighlanderForgeBlade` na implementacao real
+> (ver `src/config.rs`).
+
 ---
 
 ## Table of Contents

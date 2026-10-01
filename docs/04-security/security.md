@@ -2,6 +2,11 @@
 
 > Defense in depth for a tool that runs with Administrator privileges.
 
+> ℹ️ **Status v3.0.0-alpha.2 — implementado:** manifest UAC `requireAdministrator` embutido no exe
+> (build.rs/winres), checksum CRC32 do estado com deteccao de tamper, logs estruturados em arquivo
+> rotativo. **Ainda nao implementado:** criptografia AES-256-GCM via Credential Manager, verificacao
+> Ed25519 de updates, whitelist de servicos antes de desabilitar. Ver [`../STATUS.md`](../STATUS.md).
+
 ---
 
 ## Table of Contents

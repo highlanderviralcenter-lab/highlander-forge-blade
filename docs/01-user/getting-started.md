@@ -2,6 +2,14 @@
 
 > From zero to first maintenance in 5 minutes.
 
+> ⚠️ **Status v3.0.0-alpha.2 (2026-10-01):** o unico modo realmente funcional hoje e a **TUI**
+> (`cargo run` como Administrador) com as Fases 1 e 2 usando dados reais via PowerShell CIM.
+> As flags `--auto-phase`, `--what-if`, `--format`, `--check-update` e os relatorios em disco
+> **ainda nao estao implementados no binario** — aparecem neste guia apenas como referencia do
+> design alvo (alpha.3+). O antigo caminho base `C:\ManutencaoWindows` foi substituido por
+> `%PROGRAMDATA%\HighlanderForgeBlade` (State\, Logs\, Reports\), configuravel via TOML/JSON
+> ou variavel de ambiente `HFB_BASE_DIR`. Veja [`../STATUS.md`](../STATUS.md) para a matriz honesta.
+
 ---
 
 ## Table of Contents

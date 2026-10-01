@@ -2,6 +2,10 @@
 
 > Visual timeline from alpha to v4.0 SaaS. Milestones are calendar weeks.
 
+> ℹ️ **Realidade v3.0.0-alpha.2 (2026-10-01):** Fases 1–2 funcionais na TUI; motor headless pronto
+> mas sem dispatcher CLI; Fases 3–5, relatorios fisicos e auto-update pendentes. Prioridade da
+> proxima release (alpha.3): CLI + cleanup real + unificacao do core. Matriz: [`../STATUS.md`](../STATUS.md).
+
 ---
 
 ## Table of Contents

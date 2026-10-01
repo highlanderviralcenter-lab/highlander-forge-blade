@@ -2,6 +2,12 @@
 
 > How HFB manages execution state across phases and reboots.
 
+> ⚠️ **Status v3.0.0-alpha.2:** persistencia de estado **funcional e corrigida** (checksum CRC32
+> recalculado na migracao v0→v1; testes de roundtrip/tamper incluitos). O caminho real do arquivo
+> e `%PROGRAMDATA%\HighlanderForgeBlade\State\state.json` (config via `HFB_BASE_DIR`/TOML), nao o
+> `estado_manutencao.json` de exemplo abaixo. Fases 4/5 (reboot/pós-reboot) do diagrama ainda nao
+> estao implementadas no executor.
+
 ---
 
 ## Table of Contents

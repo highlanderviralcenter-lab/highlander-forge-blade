@@ -2,6 +2,12 @@
 
 > TUI, headless, simulation, and auto-phase reference.
 
+> ⚠️ **Status v3.0.0-alpha.2:** apenas o modo **TUI (Fases 1–2)** esta operacional. Os modos
+> Headless/Simulation/Update-Check descritos aqui sao o **design alvo** — o motor headless real
+> ja existe em `src/app/headless.rs`, mas o dispatcher CLI (`clap` em `main.rs`) ainda nao foi
+> conectado. Caminho base atual: `%PROGRAMDATA%\HighlanderForgeBlade` (nao mais `C:\ManutencaoWindows`).
+> Matriz completa: [`../STATUS.md`](../STATUS.md).
+
 ---
 
 ## Table of Contents

@@ -2,6 +2,11 @@
 
 > TUI (ratatui) and GUI (iced) implementations.
 
+> ℹ️ **Status v3.0.0-alpha.2:** TUI funcional (menu, auditoria Fase 1/2 com dados reais).
+> A limpeza exibida (Fase 3) ainda e simulada; views de relatorio em stub; GUI (iced) nao iniciada.
+> Nota de implementacao: a UI hoje reimplementa a coleta inline via PowerShell CIM em vez de usar
+> `core::Auditor` + `ProviderFactory` — unificacao planejada para alpha.3 ([`../STATUS.md`](../STATUS.md)).
+
 ---
 
 ## Table of Contents

@@ -2,6 +2,10 @@
 
 > Output formats, structure, and customization.
 
+> ⚠️ **Status v3.0.0-alpha.2:** geracao de relatorios em disco (HTML/TXT/JSON) **ainda nao
+> implementada**. Este documento define o formato alvo. Hoje os unicos artefatos fisicos sao
+> `State\state.json` e logs rotativos em `%PROGRAMDATA%\HighlanderForgeBlade\Logs\`.
+
 ---
 
 ## Table of Contents
