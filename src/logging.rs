@@ -10,7 +10,7 @@ use tracing_subscriber::{
     fmt::{self},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter, Registry,
+    EnvFilter,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

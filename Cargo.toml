@@ -40,7 +40,7 @@ aes-gcm = "0.10"
 rand = "0.8"
 ed25519-dalek = { version = "2.1", features = ["alloc", "rand_core"] }
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.9", features = ["v4", "serde"] }
+uuid = { version = "1.9", features = ["v4", "v5", "serde"] }
 semver = "1.0"
 anyhow = "1.0"
 thiserror = "1.0"

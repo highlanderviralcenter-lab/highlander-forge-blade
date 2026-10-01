@@ -172,7 +172,6 @@ pub fn clear_post_reboot_flag(cfg: &Config) -> Result<(), FlagError> {
 #[cfg(windows)]
 fn win_reg_run_once(command: &str) -> Result<(), FlagError> {
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
         RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
     };
@@ -187,8 +186,8 @@ fn win_reg_run_once(command: &str) -> Result<(), FlagError> {
         let val: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
         let name: Vec<u16> = "HighlanderForgeBlade".encode_utf16().chain(std::iter::once(0)).collect();
         let val_bytes = unsafe { std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 2) };
-        let r = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(val_bytes));
-        if r != ERROR_SUCCESS { return Err(FlagError::Io(format!("RegSetValueExW: {:?}", r))); }
+        RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(val_bytes))
+            .map_err(|e| FlagError::Io(format!("RegSetValueExW: {}", e)))?;
         Ok(())
     }
 }
