@@ -1,2 +1,8 @@
 # Rust build artifacts
 target/
+# Rust build artifacts (garantir)
+target/
+
+# Logs e artefatos locais
+*.log
+debug.txt
